@@ -1,0 +1,9 @@
+[package]
+name = "c509-cert"
+version = "0.1.0"
+edition = "2024"
+description = "Parser for CBOR Encoded X.509 Certificates (C509), draft-ietf-cose-cbor-encoded-cert-19"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+minicbor = { version = "2.3.0", features = ["std"] }
