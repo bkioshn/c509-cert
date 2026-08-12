@@ -54,18 +54,28 @@ mod common;
 mod error;
 mod extensions;
 mod name;
-mod oid;
 pub mod registry;
 
 pub use algorithm::AlgorithmIdentifier;
 pub use certificate::{C509Certificate, TbsCertificate};
 pub use common::{IntOrOid, SpecialText};
 pub use error::{Error, Result};
-pub use extensions::ip_addr::{AddressPrefix, AsIdOrRange, IpAddressChoice, IpAddressFamily, IpAddressOrRange};
+pub use extensions::ip_addr::{AsIdOrRange, IpAddressChoice, IpAddressFamily, IpAddressOrRange};
 pub use extensions::{
     AccessDescription, AuthorityKeyIdentifier, BasicConstraints, DistributionPointName, Extension, Extensions,
     ExtensionValue, GeneralName, GeneralNameValue, NameConstraints, PolicyConstraints, PolicyInformation,
     PolicyQualifier, RdnAttributeMulti,
 };
 pub use name::{Name, RdnAttribute};
-pub use oid::Oid;
+/// Re-exported for convenience: used by [`SpecialText::Mac`] and
+/// [`GeneralNameValue::MacAddress`].
+pub use macaddr::MacAddr;
+/// Re-exported for convenience: used by [`TbsCertificate::certificate_serial_number`]
+/// and [`AuthorityKeyIdentifier::cert_serial`].
+pub use num_bigint::BigUint;
+/// Re-exported for convenience since it appears throughout this crate's
+/// public API (e.g. [`IntOrOid::Oid`], [`GeneralNameValue::RegisteredId`]).
+pub use oid::ObjectIdentifier;
+/// Re-exported for convenience: used by [`TbsCertificate::validity_not_before`]
+/// and [`TbsCertificate::validity_not_after`].
+pub use time::OffsetDateTime;

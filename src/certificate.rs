@@ -30,6 +30,8 @@
 
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use num_bigint::BigUint;
+use time::OffsetDateTime;
 
 use crate::algorithm::AlgorithmIdentifier;
 use crate::common;
@@ -44,14 +46,13 @@ pub struct TbsCertificate {
     /// DER-encoded certificate (Section 8.2).
     pub c509_certificate_type: i32,
     /// `~biguint`: big-endian magnitude, no leading `0x00` byte.
-    pub certificate_serial_number: Vec<u8>,
+    pub certificate_serial_number: BigUint,
     pub issuer_signature_algorithm: AlgorithmIdentifier,
     /// `None` means "identical to `subject`" (self-signed).
     pub issuer: Option<Name>,
-    /// POSIX seconds.
-    pub validity_not_before: u64,
+    pub validity_not_before: OffsetDateTime,
     /// `None` means "no expiration" (X.509 `99991231235959Z`).
-    pub validity_not_after: Option<u64>,
+    pub validity_not_after: Option<OffsetDateTime>,
     pub subject: Name,
     pub subject_public_key_algorithm: AlgorithmIdentifier,
     /// Opaque public key bytes, exactly as they appear on the C509 wire
@@ -145,13 +146,13 @@ impl C509Certificate {
         e: &mut Encoder<W>,
     ) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
         e.i32(self.tbs.c509_certificate_type)?;
-        e.bytes(&self.tbs.certificate_serial_number)?;
+        e.bytes(&common::biguint_bytes(&self.tbs.certificate_serial_number))?;
         self.tbs.issuer_signature_algorithm.encode(e)?;
         Name::encode_optional(&self.tbs.issuer, e)?;
-        e.u64(self.tbs.validity_not_before)?;
+        common::encode_time(e, self.tbs.validity_not_before)?;
         match self.tbs.validity_not_after {
             Some(t) => {
-                e.u64(t)?;
+                common::encode_time(e, t)?;
             }
             None => {
                 e.null()?;

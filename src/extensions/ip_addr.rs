@@ -16,7 +16,17 @@
 //! Larger addresses (e.g. most full IPv6 values) use the direct
 //! `unusedBits || value` byte-string form instead, uniformly for the whole
 //! family, per Section 3.3.
+//!
+//! Addresses are exposed through [`ipnet::IpNet`] (for prefixes, which carry
+//! a prefix length) and [`std::net::IpAddr`] (for arbitrary, not
+//! necessarily prefix-aligned, ranges). Both require the family's AFI
+//! (Section 3.3, IANA Address Family Identifiers) to be 1 (IPv4) or 2
+//! (IPv6); other address families cannot be represented by these types and
+//! are rejected with [`Error::Malformed`](crate::Error).
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use ipnet::IpNet;
 use minicbor::data::{Int, Type};
 use minicbor::{Decoder, Encoder};
 
@@ -27,80 +37,114 @@ use crate::error::{Error, Result};
 /// type 0/1 integer).
 const MAX_INT_FORM_BYTES: usize = 8;
 
-/// A normalized RFC 3779 address value: the `unusedBits || value` byte
-/// sequence of the underlying ASN.1 BIT STRING, regardless of which CBOR
-/// wire form (delta-coded int, or raw bytes) it was decoded from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AddressPrefix {
-    pub unused_bits: u8,
-    pub bytes: Vec<u8>,
+fn address_width(afi: u16) -> Result<usize> {
+    match afi {
+        1 => Ok(4),
+        2 => Ok(16),
+        _ => Err(Error::malformed(
+            "unsupported address family for typed decoding (expected AFI 1 = IPv4 or 2 = IPv6)",
+        )),
+    }
 }
 
-impl AddressPrefix {
-    /// Number of significant prefix bits (`8 * bytes.len() - unused_bits`).
-    pub fn prefix_len(&self) -> usize {
-        self.bytes.len() * 8 - self.unused_bits as usize
+/// Build a full-width address from the significant leading bytes of an RFC
+/// 3779 address value, filling the remaining (unspecified) trailing bytes
+/// with `fill` (`0x00` for a prefix or a range minimum, `0xFF` for a range
+/// maximum).
+fn build_addr(afi: u16, significant: &[u8], fill: u8) -> Result<IpAddr> {
+    let width = address_width(afi)?;
+    if significant.len() > width {
+        return Err(Error::malformed("address value longer than its family's width"));
     }
-
-    fn framed_len(&self) -> usize {
-        self.bytes.len() + 1
-    }
-
-    fn from_absolute_int(abs: i128) -> Result<Self> {
-        if abs < 0 {
-            return Err(Error::malformed("resolved IP address delta is negative"));
+    let mut buf = vec![fill; width];
+    buf[..significant.len()].copy_from_slice(significant);
+    Ok(match width {
+        4 => IpAddr::V4(Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3])),
+        _ => {
+            let mut arr = [0u8; 16];
+            arr.copy_from_slice(&buf);
+            IpAddr::V6(Ipv6Addr::from(arr))
         }
-        let full = (abs as u128).to_be_bytes();
-        let mut v: Vec<u8> = full.to_vec();
-        while v.len() > 1 && v[0] == 0 {
-            v.remove(0);
-        }
-        let framing = v[0];
-        let unused_bits = framing
-            .checked_sub(1)
-            .ok_or_else(|| Error::malformed("invalid unusedBits+1 framing byte"))?;
-        Ok(AddressPrefix {
-            unused_bits,
-            bytes: v[1..].to_vec(),
-        })
-    }
+    })
+}
 
-    fn to_absolute_int(&self) -> Result<i128> {
-        if self.framed_len() > MAX_INT_FORM_BYTES {
-            return Err(Error::malformed("address does not fit the CBOR int delta form"));
-        }
-        let mut v = Vec::with_capacity(self.framed_len());
-        v.push(self.unused_bits.checked_add(1).ok_or_else(|| {
-            Error::malformed("unusedBits too large to use the CBOR int delta form")
-        })?);
-        v.extend_from_slice(&self.bytes);
-        let mut buf = [0u8; 16];
-        buf[16 - v.len()..].copy_from_slice(&v);
-        Ok(u128::from_be_bytes(buf) as i128)
-    }
+fn build_prefix(afi: u16, significant: &[u8], unused_bits: u8) -> Result<IpNet> {
+    let addr = build_addr(afi, significant, 0x00)?;
+    let prefix_len = (significant.len() as u8)
+        .checked_mul(8)
+        .and_then(|bits| bits.checked_sub(unused_bits))
+        .ok_or_else(|| Error::malformed("invalid RFC 3779 prefix length"))?;
+    IpNet::new(addr, prefix_len).map_err(|_| Error::malformed("invalid RFC 3779 prefix length"))
+}
 
-    fn from_raw_bytes(raw: &[u8]) -> Result<Self> {
-        if raw.is_empty() {
-            return Err(Error::malformed("empty RFC 3779 address byte string"));
-        }
-        Ok(AddressPrefix {
-            unused_bits: raw[0],
-            bytes: raw[1..].to_vec(),
-        })
-    }
+/// Inverse of [`build_prefix`]: the significant leading bytes of the network
+/// address (trimmed to `prefix_len`) plus the resulting `unusedBits`.
+fn prefix_to_framed(net: &IpNet) -> (Vec<u8>, u8) {
+    let full: Vec<u8> = match net.network() {
+        IpAddr::V4(a) => a.octets().to_vec(),
+        IpAddr::V6(a) => a.octets().to_vec(),
+    };
+    let prefix_len = net.prefix_len();
+    let sig_len = prefix_len.div_ceil(8) as usize;
+    let unused_bits = sig_len as u8 * 8 - prefix_len;
+    (full[..sig_len].to_vec(), unused_bits)
+}
 
-    fn to_raw_bytes(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(self.framed_len());
-        v.push(self.unused_bits);
-        v.extend_from_slice(&self.bytes);
-        v
+/// Inverse of `build_addr`: strips whole trailing bytes equal to `fill`,
+/// leaving the significant leading bytes.
+fn addr_to_framed_trimmed(addr: &IpAddr, fill: u8) -> Vec<u8> {
+    let full: Vec<u8> = match addr {
+        IpAddr::V4(a) => a.octets().to_vec(),
+        IpAddr::V6(a) => a.octets().to_vec(),
+    };
+    let mut end = full.len();
+    while end > 0 && full[end - 1] == fill {
+        end -= 1;
     }
+    full[..end].to_vec()
+}
+
+fn absolute_int_from_framed(significant: &[u8], unused_bits: u8) -> Result<i128> {
+    let framed_len = significant.len() + 1;
+    if framed_len > MAX_INT_FORM_BYTES {
+        return Err(Error::malformed("address does not fit the CBOR int delta form"));
+    }
+    let mut v = Vec::with_capacity(framed_len);
+    v.push(
+        unused_bits
+            .checked_add(1)
+            .ok_or_else(|| Error::malformed("unusedBits too large to use the CBOR int delta form"))?,
+    );
+    v.extend_from_slice(significant);
+    let mut buf = [0u8; 16];
+    buf[16 - v.len()..].copy_from_slice(&v);
+    Ok(u128::from_be_bytes(buf) as i128)
+}
+
+/// Inverse of [`absolute_int_from_framed`]: the significant leading bytes
+/// and `unusedBits` encoded by a resolved delta-chain integer.
+fn framed_from_absolute_int(abs: i128) -> Result<(Vec<u8>, u8)> {
+    if abs < 0 {
+        return Err(Error::malformed("resolved IP address delta is negative"));
+    }
+    let full = (abs as u128).to_be_bytes();
+    let mut v: Vec<u8> = full.to_vec();
+    while v.len() > 1 && v[0] == 0 {
+        v.remove(0);
+    }
+    let framing = v[0];
+    let unused_bits = framing
+        .checked_sub(1)
+        .ok_or_else(|| Error::malformed("invalid unusedBits+1 framing byte"))?;
+    Ok((v[1..].to_vec(), unused_bits))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IpAddressOrRange {
-    Prefix(AddressPrefix),
-    Range { min: AddressPrefix, max: AddressPrefix },
+    /// A CIDR-style address prefix.
+    Prefix(IpNet),
+    /// An arbitrary (not necessarily prefix-aligned) address range.
+    Range { min: IpAddr, max: IpAddr },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +192,10 @@ fn encode_delta<W: minicbor::encode::Write>(
     Ok(())
 }
 
+fn to_encode_err<W: minicbor::encode::Write>(_: Error) -> minicbor::encode::Error<W::Error> {
+    minicbor::encode::Error::message("address value too large for the CBOR int delta form")
+}
+
 // ---- IPAddrBlocks -----------------------------------------------------
 
 pub(crate) fn decode_ip_address_families(d: &mut Decoder<'_>) -> Result<Vec<IpAddressFamily>> {
@@ -164,13 +212,13 @@ pub(crate) fn decode_ip_address_families(d: &mut Decoder<'_>) -> Result<Vec<IpAd
         } else {
             Some(d.u16()?)
         };
-        let choice = decode_ip_address_choice(d)?;
+        let choice = decode_ip_address_choice(afi, d)?;
         out.push(IpAddressFamily { afi, safi, choice });
     }
     Ok(out)
 }
 
-fn decode_ip_address_choice(d: &mut Decoder<'_>) -> Result<IpAddressChoice> {
+fn decode_ip_address_choice(afi: u16, d: &mut Decoder<'_>) -> Result<IpAddressChoice> {
     if d.datatype()? == Type::Null {
         d.null()?;
         return Ok(IpAddressChoice::Inherit);
@@ -208,9 +256,11 @@ fn decode_ip_address_choice(d: &mut Decoder<'_>) -> Result<IpAddressChoice> {
                     let max_raw = i128::from(d.int()?);
                     let max_abs = previous + max_raw;
                     previous = max_abs;
+                    let (min_bytes, _) = framed_from_absolute_int(min_abs)?;
+                    let (max_bytes, _) = framed_from_absolute_int(max_abs)?;
                     entries.push(IpAddressOrRange::Range {
-                        min: AddressPrefix::from_absolute_int(min_abs)?,
-                        max: AddressPrefix::from_absolute_int(max_abs)?,
+                        min: build_addr(afi, &min_bytes, 0x00)?,
+                        max: build_addr(afi, &max_bytes, 0xFF)?,
                     });
                 }
                 _ => {
@@ -218,7 +268,8 @@ fn decode_ip_address_choice(d: &mut Decoder<'_>) -> Result<IpAddressChoice> {
                     let abs = if first { raw } else { previous + raw };
                     previous = abs;
                     first = false;
-                    entries.push(IpAddressOrRange::Prefix(AddressPrefix::from_absolute_int(abs)?));
+                    let (bytes, unused_bits) = framed_from_absolute_int(abs)?;
+                    entries.push(IpAddressOrRange::Prefix(build_prefix(afi, &bytes, unused_bits)?));
                 }
             }
         } else {
@@ -228,13 +279,25 @@ fn decode_ip_address_choice(d: &mut Decoder<'_>) -> Result<IpAddressChoice> {
                     if n != 2 {
                         return Err(Error::malformed("AddressRange must have 2 elements"));
                     }
-                    let min = AddressPrefix::from_raw_bytes(d.bytes()?)?;
-                    let max = AddressPrefix::from_raw_bytes(d.bytes()?)?;
+                    let min_raw = d.bytes()?;
+                    if min_raw.is_empty() {
+                        return Err(Error::malformed("empty RFC 3779 address byte string"));
+                    }
+                    let min = build_addr(afi, &min_raw[1..], 0x00)?;
+                    let max_raw = d.bytes()?;
+                    if max_raw.is_empty() {
+                        return Err(Error::malformed("empty RFC 3779 address byte string"));
+                    }
+                    let max = build_addr(afi, &max_raw[1..], 0xFF)?;
                     entries.push(IpAddressOrRange::Range { min, max });
                 }
                 _ => {
-                    let p = AddressPrefix::from_raw_bytes(d.bytes()?)?;
-                    entries.push(IpAddressOrRange::Prefix(p));
+                    let raw = d.bytes()?;
+                    if raw.is_empty() {
+                        return Err(Error::malformed("empty RFC 3779 address byte string"));
+                    }
+                    let net = build_prefix(afi, &raw[1..], raw[0])?;
+                    entries.push(IpAddressOrRange::Prefix(net));
                 }
             }
         }
@@ -262,6 +325,14 @@ pub(crate) fn encode_ip_address_families<W: minicbor::encode::Write>(
     Ok(())
 }
 
+/// A `Prefix` or `Range` entry, reduced to plain `(significant bytes,
+/// unusedBits)` pairs ready for either the delta-coded int form or the raw
+/// bytes form.
+enum ResolvedEntry {
+    Prefix { bytes: Vec<u8>, unused_bits: u8 },
+    Range { min_bytes: Vec<u8>, max_bytes: Vec<u8> },
+}
+
 fn encode_ip_address_choice<W: minicbor::encode::Write>(
     choice: &IpAddressChoice,
     e: &mut Encoder<W>,
@@ -271,37 +342,46 @@ fn encode_ip_address_choice<W: minicbor::encode::Write>(
             e.null()?;
         }
         IpAddressChoice::Prefixes(entries) => {
-            let use_int_form = entries.iter().all(|entry| match entry {
-                IpAddressOrRange::Prefix(p) => p.framed_len() <= MAX_INT_FORM_BYTES,
-                IpAddressOrRange::Range { min, max } => {
-                    min.framed_len() <= MAX_INT_FORM_BYTES && max.framed_len() <= MAX_INT_FORM_BYTES
+            let resolved: Vec<ResolvedEntry> = entries
+                .iter()
+                .map(|entry| match entry {
+                    IpAddressOrRange::Prefix(net) => {
+                        let (bytes, unused_bits) = prefix_to_framed(net);
+                        ResolvedEntry::Prefix { bytes, unused_bits }
+                    }
+                    IpAddressOrRange::Range { min, max } => ResolvedEntry::Range {
+                        min_bytes: addr_to_framed_trimmed(min, 0x00),
+                        max_bytes: addr_to_framed_trimmed(max, 0xFF),
+                    },
+                })
+                .collect();
+
+            let use_int_form = resolved.iter().all(|r| match r {
+                ResolvedEntry::Prefix { bytes, .. } => bytes.len() < MAX_INT_FORM_BYTES,
+                ResolvedEntry::Range { min_bytes, max_bytes } => {
+                    min_bytes.len() < MAX_INT_FORM_BYTES && max_bytes.len() < MAX_INT_FORM_BYTES
                 }
             });
+
             e.array(entries.len() as u64)?;
             if use_int_form {
                 let mut previous: i128 = 0;
                 let mut first = true;
-                for entry in entries {
-                    match entry {
-                        IpAddressOrRange::Prefix(p) => {
-                            let abs = p
-                                .to_absolute_int()
-                                .map_err(|_| minicbor::encode::Error::message("bad address prefix"))?;
+                for r in &resolved {
+                    match r {
+                        ResolvedEntry::Prefix { bytes, unused_bits } => {
+                            let abs = absolute_int_from_framed(bytes, *unused_bits).map_err(to_encode_err::<W>)?;
                             let delta = if first { abs } else { abs - previous };
                             previous = abs;
                             first = false;
                             encode_delta(e, delta)?;
                         }
-                        IpAddressOrRange::Range { min, max } => {
-                            let min_abs = min
-                                .to_absolute_int()
-                                .map_err(|_| minicbor::encode::Error::message("bad address prefix"))?;
+                        ResolvedEntry::Range { min_bytes, max_bytes } => {
+                            let min_abs = absolute_int_from_framed(min_bytes, 0).map_err(to_encode_err::<W>)?;
                             let min_delta = if first { min_abs } else { min_abs - previous };
                             previous = min_abs;
                             first = false;
-                            let max_abs = max
-                                .to_absolute_int()
-                                .map_err(|_| minicbor::encode::Error::message("bad address prefix"))?;
+                            let max_abs = absolute_int_from_framed(max_bytes, 0).map_err(to_encode_err::<W>)?;
                             let max_delta = max_abs - previous;
                             previous = max_abs;
                             e.array(2)?;
@@ -311,15 +391,24 @@ fn encode_ip_address_choice<W: minicbor::encode::Write>(
                     }
                 }
             } else {
-                for entry in entries {
-                    match entry {
-                        IpAddressOrRange::Prefix(p) => {
-                            e.bytes(&p.to_raw_bytes())?;
+                for r in &resolved {
+                    match r {
+                        ResolvedEntry::Prefix { bytes, unused_bits } => {
+                            let mut raw = Vec::with_capacity(bytes.len() + 1);
+                            raw.push(*unused_bits);
+                            raw.extend_from_slice(bytes);
+                            e.bytes(&raw)?;
                         }
-                        IpAddressOrRange::Range { min, max } => {
+                        ResolvedEntry::Range { min_bytes, max_bytes } => {
                             e.array(2)?;
-                            e.bytes(&min.to_raw_bytes())?;
-                            e.bytes(&max.to_raw_bytes())?;
+                            let mut min_raw = Vec::with_capacity(min_bytes.len() + 1);
+                            min_raw.push(0);
+                            min_raw.extend_from_slice(min_bytes);
+                            e.bytes(&min_raw)?;
+                            let mut max_raw = Vec::with_capacity(max_bytes.len() + 1);
+                            max_raw.push(0);
+                            max_raw.extend_from_slice(max_bytes);
+                            e.bytes(&max_raw)?;
                         }
                     }
                 }

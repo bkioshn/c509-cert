@@ -16,10 +16,10 @@
 
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use oid::ObjectIdentifier;
 
-use crate::common::SpecialText;
+use crate::common::{self, SpecialText};
 use crate::error::{Error, Result};
-use crate::oid::Oid;
 
 /// Registry id for `commonName` (Section 8.6, value 1), used by the compact
 /// single-attribute `Name` shortcut.
@@ -38,7 +38,7 @@ pub enum RdnAttribute {
         value: SpecialText,
     },
     /// `attributeType` was encoded as `~oid` (no registry entry available).
-    Oid { oid: Oid, value: Vec<u8> },
+    Oid { oid: ObjectIdentifier, value: Vec<u8> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -74,7 +74,7 @@ impl Name {
     fn decode_attribute(d: &mut Decoder<'_>) -> Result<RdnAttribute> {
         match d.datatype()? {
             Type::Bytes => {
-                let oid = Oid::new(d.bytes()?.to_vec());
+                let oid = common::decode_oid(d)?;
                 let value = d.bytes()?.to_vec();
                 Ok(RdnAttribute::Oid { oid, value })
             }
@@ -128,7 +128,7 @@ impl Name {
                     value.encode(e)?;
                 }
                 RdnAttribute::Oid { oid, value } => {
-                    e.bytes(oid.as_bytes())?;
+                    e.bytes(&common::oid_bytes(oid))?;
                     e.bytes(value)?;
                 }
             }

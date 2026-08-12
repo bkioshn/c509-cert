@@ -12,9 +12,10 @@
 
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use oid::ObjectIdentifier;
 
+use crate::common;
 use crate::error::{Error, Result};
-use crate::oid::Oid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AlgorithmIdentifier {
@@ -24,7 +25,7 @@ pub enum AlgorithmIdentifier {
     /// An algorithm identified by OID, with DER-encoded parameters carried
     /// verbatim as an opaque byte string when present.
     Oid {
-        algorithm: Oid,
+        algorithm: ObjectIdentifier,
         parameters: Option<Vec<u8>>,
     },
 }
@@ -39,7 +40,7 @@ impl AlgorithmIdentifier {
                         "AlgorithmIdentifier array must have exactly 2 elements",
                     ));
                 }
-                let algorithm = Oid::new(d.bytes()?.to_vec());
+                let algorithm = common::decode_oid(d)?;
                 let parameters = d.bytes()?.to_vec();
                 Ok(AlgorithmIdentifier::Oid {
                     algorithm,
@@ -47,7 +48,7 @@ impl AlgorithmIdentifier {
                 })
             }
             Type::Bytes => Ok(AlgorithmIdentifier::Oid {
-                algorithm: Oid::new(d.bytes()?.to_vec()),
+                algorithm: common::decode_oid(d)?,
                 parameters: None,
             }),
             _ => Ok(AlgorithmIdentifier::Int(d.i32()?)),
@@ -66,14 +67,14 @@ impl AlgorithmIdentifier {
                 algorithm,
                 parameters: None,
             } => {
-                e.bytes(algorithm.as_bytes())?;
+                e.bytes(&common::oid_bytes(algorithm))?;
             }
             AlgorithmIdentifier::Oid {
                 algorithm,
                 parameters: Some(params),
             } => {
                 e.array(2)?;
-                e.bytes(algorithm.as_bytes())?;
+                e.bytes(&common::oid_bytes(algorithm))?;
                 e.bytes(params)?;
             }
         }

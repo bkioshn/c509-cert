@@ -17,13 +17,15 @@
 
 pub mod ip_addr;
 
+use macaddr::MacAddr;
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use num_bigint::BigUint;
+use oid::ObjectIdentifier;
 
 use crate::common::{self, IntOrOid, SpecialText};
 use crate::error::{Error, Result};
 use crate::name::Name;
-use crate::oid::Oid;
 use ip_addr::{AsIdOrRange, IpAddressFamily};
 
 fn expect_array_len(d: &mut Decoder<'_>, want: u64) -> Result<()> {
@@ -64,19 +66,22 @@ fn encode_opt_uint<W: minicbor::encode::Write>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeneralNameValue {
     /// `otherName` (registry value 0): `[ ~oid, bytes ]`.
-    OtherName { type_id: Oid, value: Vec<u8> },
+    OtherName { type_id: ObjectIdentifier, value: Vec<u8> },
     /// `otherName` with `id-on-hardwareModuleName` (registry value -1).
-    HardwareModuleName { hw_type: Oid, hw_serial_num: Vec<u8> },
+    HardwareModuleName {
+        hw_type: ObjectIdentifier,
+        hw_serial_num: Vec<u8>,
+    },
     /// `otherName` with `id-on-SmtpUTF8Mailbox` (registry value -2).
     SmtpUtf8Mailbox(String),
     /// `otherName` with `id-on-MACAddress` (registry value -3).
-    MacAddress(Vec<u8>),
+    MacAddress(MacAddr),
     Rfc822Name(String),
     DnsName(String),
     DirectoryName(Name),
     Uri(String),
     IpAddress(Vec<u8>),
-    RegisteredId(Oid),
+    RegisteredId(ObjectIdentifier),
     /// A `GeneralNameType` this crate does not decode; the raw CBOR item.
     Raw(Vec<u8>),
 }
@@ -91,17 +96,17 @@ impl GeneralName {
     fn decode(d: &mut Decoder<'_>) -> Result<Self> {
         let kind = d.i32()?;
         let value = match kind {
-            -3 => GeneralNameValue::MacAddress(d.bytes()?.to_vec()),
+            -3 => GeneralNameValue::MacAddress(common::decode_mac(d.bytes()?)?),
             -2 => GeneralNameValue::SmtpUtf8Mailbox(d.str()?.to_string()),
             -1 => {
                 expect_array_len(d, 2)?;
-                let hw_type = Oid::new(d.bytes()?.to_vec());
+                let hw_type = common::decode_oid(d)?;
                 let hw_serial_num = d.bytes()?.to_vec();
                 GeneralNameValue::HardwareModuleName { hw_type, hw_serial_num }
             }
             0 => {
                 expect_array_len(d, 2)?;
-                let type_id = Oid::new(d.bytes()?.to_vec());
+                let type_id = common::decode_oid(d)?;
                 let value = d.bytes()?.to_vec();
                 GeneralNameValue::OtherName { type_id, value }
             }
@@ -110,7 +115,7 @@ impl GeneralName {
             4 => GeneralNameValue::DirectoryName(Name::decode(d)?),
             6 => GeneralNameValue::Uri(d.str()?.to_string()),
             7 => GeneralNameValue::IpAddress(d.bytes()?.to_vec()),
-            8 => GeneralNameValue::RegisteredId(Oid::new(d.bytes()?.to_vec())),
+            8 => GeneralNameValue::RegisteredId(common::decode_oid(d)?),
             _ => GeneralNameValue::Raw(common::raw_item(d)?),
         };
         Ok(GeneralName { kind, value })
@@ -122,8 +127,8 @@ impl GeneralName {
     ) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
         e.i32(self.kind)?;
         match &self.value {
-            GeneralNameValue::MacAddress(b) => {
-                e.bytes(b)?;
+            GeneralNameValue::MacAddress(mac) => {
+                e.bytes(mac.as_bytes())?;
             }
             GeneralNameValue::SmtpUtf8Mailbox(s) => {
                 e.str(s)?;
@@ -133,12 +138,12 @@ impl GeneralName {
                 hw_serial_num,
             } => {
                 e.array(2)?;
-                e.bytes(hw_type.as_bytes())?;
+                e.bytes(&common::oid_bytes(hw_type))?;
                 e.bytes(hw_serial_num)?;
             }
             GeneralNameValue::OtherName { type_id, value } => {
                 e.array(2)?;
-                e.bytes(type_id.as_bytes())?;
+                e.bytes(&common::oid_bytes(type_id))?;
                 e.bytes(value)?;
             }
             GeneralNameValue::Rfc822Name(s) | GeneralNameValue::DnsName(s) | GeneralNameValue::Uri(s) => {
@@ -151,7 +156,7 @@ impl GeneralName {
                 e.bytes(b)?;
             }
             GeneralNameValue::RegisteredId(oid) => {
-                e.bytes(oid.as_bytes())?;
+                e.bytes(&common::oid_bytes(oid))?;
             }
             GeneralNameValue::Raw(bytes) => {
                 common::write_raw(e, bytes)?;
@@ -419,7 +424,7 @@ fn encode_access_descriptions<W: minicbor::encode::Write>(
 pub struct AuthorityKeyIdentifier {
     pub key_identifier: Vec<u8>,
     pub cert_issuer: Option<Vec<GeneralName>>,
-    pub cert_serial: Option<Vec<u8>>,
+    pub cert_serial: Option<BigUint>,
 }
 
 fn decode_authority_key_identifier(d: &mut Decoder<'_>) -> Result<AuthorityKeyIdentifier> {
@@ -455,7 +460,7 @@ fn encode_authority_key_identifier<W: minicbor::encode::Write>(
             e.array(3)?;
             e.bytes(&v.key_identifier)?;
             encode_general_names(issuer, e)?;
-            e.bytes(serial)?;
+            e.bytes(&common::biguint_bytes(serial))?;
         }
         _ => {
             return Err(minicbor::encode::Error::message(
@@ -630,7 +635,7 @@ pub enum RdnAttributeMulti {
         values: Vec<SpecialText>,
     },
     Oid {
-        oid: Oid,
+        oid: ObjectIdentifier,
         values: Vec<Vec<u8>>,
     },
 }
@@ -646,7 +651,7 @@ fn decode_subject_directory_attributes(d: &mut Decoder<'_>) -> Result<Vec<RdnAtt
     for _ in 0..(len / 2) {
         match d.datatype()? {
             Type::Bytes => {
-                let oid = Oid::new(d.bytes()?.to_vec());
+                let oid = common::decode_oid(d)?;
                 let n = common::definite_array_len(d)?;
                 let mut values = Vec::with_capacity(n as usize);
                 for _ in 0..n {
@@ -694,7 +699,7 @@ fn encode_subject_directory_attributes<W: minicbor::encode::Write>(
                 }
             }
             RdnAttributeMulti::Oid { oid, values } => {
-                e.bytes(oid.as_bytes())?;
+                e.bytes(&common::oid_bytes(oid))?;
                 e.array(values.len() as u64)?;
                 for val in values {
                     e.bytes(val)?;
@@ -857,7 +862,7 @@ pub struct Extension {
 fn decode_extension(d: &mut Decoder<'_>) -> Result<Extension> {
     match d.datatype()? {
         Type::Bytes => {
-            let oid = Oid::new(d.bytes()?.to_vec());
+            let oid = common::decode_oid(d)?;
             let (critical, raw) = match d.datatype()? {
                 Type::Array | Type::ArrayIndef => {
                     expect_array_len(d, 1)?;
@@ -896,7 +901,7 @@ fn encode_extension<W: minicbor::encode::Write>(
             encode_extension_value(&ext.value, e)?;
         }
         IntOrOid::Oid(oid) => {
-            e.bytes(oid.as_bytes())?;
+            e.bytes(&common::oid_bytes(oid))?;
             let raw = match &ext.value {
                 ExtensionValue::Raw(b) => b.as_slice(),
                 _ => {

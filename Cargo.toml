@@ -6,4 +6,10 @@ description = "Parser for CBOR Encoded X.509 Certificates (C509), draft-ietf-cos
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+hex = "0.4"
+ipnet = "2.12.1"
+macaddr = "1"
 minicbor = { version = "2.3.0", features = ["std"] }
+num-bigint = "0.4"
+oid = "0.3.0"
+time = "0.3"

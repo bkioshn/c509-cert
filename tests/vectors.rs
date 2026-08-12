@@ -1,20 +1,22 @@
 //! Round-trip tests built from the worked examples in
 //! `draft-ietf-cose-cbor-encoded-cert-19` (Appendix A and Section 3.3.1).
 
+use std::net::IpAddr;
+
 use c509_cert::{
-    AddressPrefix, AlgorithmIdentifier, C509Certificate, Extension, ExtensionValue, IntOrOid, IpAddressChoice,
-    IpAddressOrRange, Name, RdnAttribute, SpecialText,
+    AlgorithmIdentifier, C509Certificate, Extension, ExtensionValue, IntOrOid, IpAddressChoice, IpAddressOrRange,
+    Name, RdnAttribute, SpecialText,
 };
+use ipnet::IpNet;
+use macaddr::MacAddr;
 use minicbor::data::Tag;
 use minicbor::Encoder;
+use num_bigint::BigUint;
+use time::OffsetDateTime;
 
 fn hex(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    assert_eq!(s.len() % 2, 0, "odd-length hex string");
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-        .collect()
+    hex::decode(s).expect("valid hex")
 }
 
 // Appendix A.1.1: "CBOR re-encoded X.509 v3 Certificate" (c509CertificateType
@@ -73,18 +75,24 @@ fn appendix_a1_1_der_reencoded_roundtrip() {
 
     let cert = C509Certificate::decode_sequence(&bytes).expect("decode_sequence");
     assert_eq!(cert.tbs.c509_certificate_type, 3);
-    assert_eq!(cert.tbs.certificate_serial_number, hex("01F50D"));
+    assert_eq!(cert.tbs.certificate_serial_number, BigUint::from(128_269u32));
     assert_eq!(cert.tbs.issuer_signature_algorithm, AlgorithmIdentifier::Int(0));
     expect_compact_common_name(cert.tbs.issuer.as_ref().unwrap(), "RFC test CA");
-    assert_eq!(cert.tbs.validity_not_before, 1_672_531_200);
-    assert_eq!(cert.tbs.validity_not_after, Some(1_767_225_600));
+    assert_eq!(
+        cert.tbs.validity_not_before,
+        OffsetDateTime::from_unix_timestamp(1_672_531_200).unwrap()
+    );
+    assert_eq!(
+        cert.tbs.validity_not_after,
+        Some(OffsetDateTime::from_unix_timestamp(1_767_225_600).unwrap())
+    );
 
     match cert.tbs.subject.0.as_slice() {
         [RdnAttribute::Registered {
             id: 1,
             printable_string: false,
             value: SpecialText::Mac(mac),
-        }] => assert_eq!(mac, &hex("0123456789AB")),
+        }] => assert_eq!(*mac, MacAddr::from([0x01, 0x23, 0x45, 0x67, 0x89, 0xAB])),
         other => panic!("unexpected subject: {other:?}"),
     }
 
@@ -117,7 +125,7 @@ fn appendix_a1_2_natively_signed_roundtrip() {
 
     let cert = C509Certificate::decode_sequence(&bytes).expect("decode_sequence");
     assert_eq!(cert.tbs.c509_certificate_type, 2);
-    assert_eq!(cert.tbs.certificate_serial_number, hex("01F50D"));
+    assert_eq!(cert.tbs.certificate_serial_number, BigUint::from(128_269u32));
     expect_compact_common_name(cert.tbs.issuer.as_ref().unwrap(), "RFC test CA");
     assert_eq!(cert.tbs.subject_public_key.len(), 33);
     assert_eq!(cert.tbs.subject_public_key[0], 0x02, "uncompressed-form octet, not point-compressed");
@@ -261,9 +269,10 @@ fn appendix_a5_ip_addr_blocks_example() {
     assert_eq!(exts.len(), 3);
     assert_eq!(exts[0].value, ExtensionValue::KeyUsage(1));
 
-    let prefix = |unused_bits: u8, hex_bytes: &str| AddressPrefix {
-        unused_bits,
-        bytes: hex(hex_bytes),
+    let net = |s: &str| IpAddressOrRange::Prefix(s.parse::<IpNet>().unwrap());
+    let range = |min: &str, max: &str| IpAddressOrRange::Range {
+        min: min.parse::<IpAddr>().unwrap(),
+        max: max.parse::<IpAddr>().unwrap(),
     };
 
     let ExtensionValue::IpAddrBlocks(families) = &exts[1].value else {
@@ -277,13 +286,8 @@ fn appendix_a5_ip_addr_blocks_example() {
     };
     assert_eq!(
         v4,
-        &[
-            IpAddressOrRange::Prefix(prefix(0, "C00002")),
-            IpAddressOrRange::Prefix(prefix(4, "C6336400")),
-            IpAddressOrRange::Prefix(prefix(0, "CB0071")),
-        ]
+        &[net("192.0.2.0/24"), net("198.51.100.0/28"), net("203.0.113.0/24")]
     );
-    assert_eq!(v4[0].clone(), IpAddressOrRange::Prefix(prefix(0, "C00002")));
     if let IpAddressOrRange::Prefix(p) = &v4[0] {
         assert_eq!(p.prefix_len(), 24);
     }
@@ -298,11 +302,8 @@ fn appendix_a5_ip_addr_blocks_example() {
     assert_eq!(
         v6,
         &[
-            IpAddressOrRange::Prefix(prefix(0, "20010DB81234")),
-            IpAddressOrRange::Range {
-                min: prefix(0, "3FFF06"),
-                max: prefix(0, "3FFF0F"),
-            },
+            net("2001:db8:1234::/48"),
+            range("3fff:600::", "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff"),
         ]
     );
 
@@ -323,11 +324,8 @@ fn appendix_a5_ip_addr_blocks_example() {
     assert_eq!(
         v6_v2,
         &[
-            IpAddressOrRange::Prefix(prefix(0, "20010DB81234")),
-            IpAddressOrRange::Range {
-                min: prefix(0, "3FFF0003"),
-                max: prefix(0, "3FFF01220000223333445566"),
-            },
+            net("2001:db8:1234::/48"),
+            range("3fff:3::", "3fff:122:0:2233:3344:5566:ffff:ffff"),
         ]
     );
 
