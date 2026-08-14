@@ -20,13 +20,6 @@
 //!    extensions: Extensions,
 //! )
 //! ```
-//!
-//! Because `TBSCertificate` is spliced into `C509Certificate` as a CBOR
-//! Sequence, the wire format is **one flat 11-element array**, not a
-//! 2-element array containing a nested array. `TbsCertificate` here is a
-//! plain data holder (it is not independently `Decode`/`Encode`, since it
-//! doesn't correspond to one standalone CBOR item); `C509Certificate` is
-//! the type that implements the standard `minicbor` traits.
 
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
@@ -39,39 +32,44 @@ use crate::error::{Error, Result};
 use crate::extensions::Extensions;
 use crate::name::Name;
 
+/// The number of fields represent in array form.
+const FIELD_COUNT: u64 = 11;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TbsCertificate {
     /// The X.509 `version` and the C509 wire format both live here: `2` for
     /// a natively signed certificate, `3` for a CBOR re-encoding of a
     /// DER-encoded certificate (Section 8.2).
     pub c509_certificate_type: i32,
-    /// `~biguint`: big-endian magnitude, no leading `0x00` byte.
+    /// `biguint`: big-endian magnitude, no leading `0x00` byte.
     pub certificate_serial_number: BigUint,
+    /// `AlgorithmIdentifier`: the signature algorithm used to sign the
+    /// certificate.
     pub issuer_signature_algorithm: AlgorithmIdentifier,
     /// `None` means "identical to `subject`" (self-signed).
     pub issuer: Option<Name>,
+    /// Certificate valid from this date and time.
     pub validity_not_before: OffsetDateTime,
+    /// Certificate expiration this date and time.
     /// `None` means "no expiration" (X.509 `99991231235959Z`).
     pub validity_not_after: Option<OffsetDateTime>,
+    /// The certificate subject.
     pub subject: Name,
+    /// The algorithm used to encode the subject public key.
     pub subject_public_key_algorithm: AlgorithmIdentifier,
-    /// Opaque public key bytes, exactly as they appear on the C509 wire
-    /// (already point-compressed for EC keys, modulus-only for RSA with
-    /// e=65537, etc. — see Section 3.2.1). This crate does not perform
-    /// ASN.1/DER conversion.
+    /// The certificate subject public key.
     pub subject_public_key: Vec<u8>,
+    /// The certificate extensions.
     pub extensions: Extensions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct C509Certificate {
+    /// The TBS (To Be Signed) certificate.
     pub tbs: TbsCertificate,
-    /// Opaque signature bytes, exactly as they appear on the C509 wire
-    /// (e.g. already R‖S packed for ECDSA — see Section 3.2.2).
+    /// The certificate issuer signature value.
     pub issuer_signature_value: Vec<u8>,
 }
-
-const FIELD_COUNT: u64 = 11;
 
 impl C509Certificate {
     /// Decode a `C509Certificate` CBOR item (the wrapped array form:
@@ -81,7 +79,7 @@ impl C509Certificate {
         minicbor::decode(bytes).map_err(Error::from)
     }
 
-    /// Decode the "unwrapped `~C509Certificate`" form used throughout the
+    /// Decode the "unwrapped `C509Certificate`" form used throughout the
     /// draft's own examples: an RFC 8742 CBOR Sequence of the same 11 items,
     /// with **no** outer array header.
     pub fn decode_sequence(bytes: &[u8]) -> Result<Self> {
@@ -99,14 +97,13 @@ impl C509Certificate {
     /// signed over (Section 3.1.12).
     pub fn encode_sequence(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        {
-            let mut e = Encoder::new(&mut buf);
-            self.encode_fields(&mut e)
-                .expect("Vec<u8> writer is infallible");
-        }
+        let mut e = Encoder::new(&mut buf);
+        self.encode_fields(&mut e)
+            .expect("Vec<u8> writer is infallible");
         buf
     }
 
+    /// Decode the fields of a `C509Certificate` CBOR item.
     fn decode_fields(d: &mut Decoder<'_>) -> Result<Self> {
         let c509_certificate_type = d.i32()?;
         let certificate_serial_number = common::read_biguint(d)?;
@@ -141,6 +138,7 @@ impl C509Certificate {
         })
     }
 
+    /// Encode the fields of a `C509Certificate` CBOR item.
     fn encode_fields<W: minicbor::encode::Write>(
         &self,
         e: &mut Encoder<W>,
@@ -168,20 +166,25 @@ impl C509Certificate {
 }
 
 impl<'b, C> minicbor::Decode<'b, C> for C509Certificate {
-    fn decode(d: &mut Decoder<'b>, _ctx: &mut C) -> core::result::Result<Self, minicbor::decode::Error> {
-        let n = d
-            .array()?
-            .ok_or_else(|| minicbor::decode::Error::message("C509Certificate must be a definite-length array"))?;
+    /// Decode a `C509Certificate` CBOR item.
+    fn decode(
+        d: &mut Decoder<'b>,
+        _ctx: &mut C,
+    ) -> core::result::Result<Self, minicbor::decode::Error> {
+        let n = d.array()?.ok_or_else(|| {
+            minicbor::decode::Error::message("C509Certificate must be a definite-length array")
+        })?;
         if n != FIELD_COUNT {
-            return Err(minicbor::decode::Error::message(
-                "C509Certificate array must have exactly 11 elements",
-            ));
+            return Err(minicbor::decode::Error::message(format!(
+                "C509Certificate array must have exactly {FIELD_COUNT} elements, got {n}"
+            )));
         }
         Self::decode_fields(d).map_err(Error::into_minicbor)
     }
 }
 
 impl<C> minicbor::Encode<C> for C509Certificate {
+    /// Encode a `C509Certificate` CBOR item.
     fn encode<W: minicbor::encode::Write>(
         &self,
         e: &mut Encoder<W>,
