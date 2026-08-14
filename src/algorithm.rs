@@ -33,6 +33,7 @@ pub enum AlgorithmIdentifier {
 impl AlgorithmIdentifier {
     pub(crate) fn decode(d: &mut Decoder<'_>) -> Result<Self> {
         match d.datatype()? {
+            // [ algorithm: ~oid, parameters: bytes ]
             Type::Array | Type::ArrayIndef => {
                 let len = crate::common::definite_array_len(d)?;
                 if len != 2 {
@@ -47,10 +48,12 @@ impl AlgorithmIdentifier {
                     parameters: Some(parameters),
                 })
             }
+            // ~oid
             Type::Bytes => Ok(AlgorithmIdentifier::Oid {
                 algorithm: common::decode_oid(d)?,
                 parameters: None,
             }),
+            // int
             _ => Ok(AlgorithmIdentifier::Int(d.i32()?)),
         }
     }
@@ -86,44 +89,86 @@ impl AlgorithmIdentifier {
 mod tests {
     use super::*;
 
-    fn roundtrip(bytes: &[u8]) -> AlgorithmIdentifier {
-        let mut d = Decoder::new(bytes);
-        let v = AlgorithmIdentifier::decode(&mut d).unwrap();
+    /// rsaEncryption
+    const RSA_OID: &str = "1.2.840.113549.1.1.1";
+    /// rsaEncryption, DER content octets 2A 86 48 86 F7 0D 01 01 01
+    const RSA_OID_DER: [u8; 9] = [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
+
+    // Roundtrip the AlgorithmIdentifier through the CBOR encoder and decoder.
+    fn roundtrip(algorithm: AlgorithmIdentifier) -> AlgorithmIdentifier {
         let mut buf = Vec::new();
         let mut e = Encoder::new(&mut buf);
-        v.encode(&mut e).unwrap();
-        assert_eq!(buf, bytes);
-        v
+        algorithm.encode(&mut e).unwrap();
+        let mut d = Decoder::new(&buf);
+        AlgorithmIdentifier::decode(&mut d).unwrap()
     }
 
     #[test]
     fn int_form() {
-        // 0x00 = int 0 (ECDSA with SHA-256)
-        assert_eq!(roundtrip(&[0x00]), AlgorithmIdentifier::Int(0));
+        assert_eq!(
+            roundtrip(AlgorithmIdentifier::Int(0)),
+            AlgorithmIdentifier::Int(0)
+        );
+    }
+
+    #[test]
+    fn int_form_negative() {
+        assert_eq!(
+            roundtrip(AlgorithmIdentifier::Int(-7)),
+            AlgorithmIdentifier::Int(-7)
+        );
     }
 
     #[test]
     fn oid_form() {
-        // bstr(3) 2A 86 48 == rsaEncryption prefix (arbitrary bytes for test)
-        let bytes = [0x43, 0x2A, 0x86, 0x48];
-        match roundtrip(&bytes) {
-            AlgorithmIdentifier::Oid {
-                parameters: None, ..
-            } => {}
-            other => panic!("unexpected: {other:?}"),
-        }
+        // rsaEncryption, DER content octets 2A 86 48 86 F7 0D 01 01 01
+        // wrapped as a 9-byte CBOR bytestring: header 0x49 (major type 2,
+        // length 9) followed by the content octets.
+        let oid = ObjectIdentifier::try_from(RSA_OID).expect("valid OID");
+        let value = AlgorithmIdentifier::Oid {
+            algorithm: oid,
+            parameters: None,
+        };
+
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        value.encode(&mut e).unwrap();
+        let mut expected = vec![0x49]; // bstr header: major type 2, length 9
+        expected.extend_from_slice(&RSA_OID_DER);
+        assert_eq!(buf, expected);
+        assert_eq!(roundtrip(value.clone()), value);
     }
 
     #[test]
     fn oid_with_params_form() {
-        // array(2) [ bstr(1) 0x2A, bstr(1) 0x05 ]
-        let bytes = [0x82, 0x41, 0x2A, 0x41, 0x05];
-        match roundtrip(&bytes) {
-            AlgorithmIdentifier::Oid {
-                parameters: Some(p),
-                ..
-            } => assert_eq!(p, vec![0x05]),
-            other => panic!("unexpected: {other:?}"),
-        }
+        // [ ~oid, bytes ]: array(2) header 0x82, the same 10-byte OID
+        // bytestring as `oid_form`, then a 1-byte params bytestring.
+        let oid = ObjectIdentifier::try_from(RSA_OID).expect("valid OID");
+        let value = AlgorithmIdentifier::Oid {
+            algorithm: oid,
+            parameters: Some(vec![1]),
+        };
+
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        value.encode(&mut e).unwrap();
+        let mut expected = vec![0x82, 0x49]; // array(2), bstr(9)
+        expected.extend_from_slice(&RSA_OID_DER);
+        expected.extend_from_slice(&[0x41, 0x01]); // bstr(1): params = [0x01]
+        assert_eq!(buf, expected);
+        assert_eq!(roundtrip(value.clone()), value);
+    }
+
+    #[test]
+    fn array_wrong_length_is_malformed() {
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        e.array(3).unwrap();
+        e.bytes(&[0x2A]).unwrap();
+        e.bytes(&[0x01]).unwrap();
+        e.bytes(&[0x02]).unwrap();
+
+        let mut d = Decoder::new(&buf);
+        assert!(AlgorithmIdentifier::decode(&mut d).is_err());
     }
 }
