@@ -37,11 +37,11 @@ const FIELD_COUNT: u64 = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TbsCertificate {
-    /// The X.509 `version` and the C509 wire format both live here: `2` for
-    /// a natively signed certificate, `3` for a CBOR re-encoding of a
-    /// DER-encoded certificate (Section 8.2).
+    /// The X.509 certificate type `2` for natively signed certificate
+    /// `3` for a CBOR re-encoding of a DER-encoded certificate.
     pub c509_certificate_type: i32,
-    /// `biguint`: big-endian magnitude, no leading `0x00` byte.
+    /// `biguint`: Certificate serial number unwrapped CBOR unsigned bignum.
+    ///  Big-endian magnitude, no leading `0x00` byte.
     pub certificate_serial_number: BigUint,
     /// `AlgorithmIdentifier`: the signature algorithm used to sign the
     /// certificate.
