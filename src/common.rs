@@ -205,3 +205,158 @@ impl SpecialText {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use minicbor::Encoder;
+
+    use super::*;
+
+    #[test]
+    fn decode_mac_eui48() {
+        // Arbitrary EUI-48 address.
+        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06];
+        assert_eq!(decode_mac(&bytes).unwrap(), MacAddr::from(bytes));
+    }
+
+    #[test]
+    fn decode_mac_eui64() {
+        // Arbitrary EUI-64 address.
+        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        assert_eq!(decode_mac(&bytes).unwrap(), MacAddr::from(bytes));
+    }
+
+    #[test]
+    fn decode_mac_wrong_length_is_malformed() {
+        // Arbitrary 3 bytes, is too short for an EUI-48 or EUI-64 address.
+        assert!(decode_mac(&[0x01, 0x02, 0x03]).is_err());
+    }
+
+    #[test]
+    fn oid_roundtrip() {
+        let oid = ObjectIdentifier::try_from("1.2.840.113549.1.1.1").unwrap();
+
+        let mut buf = Vec::new();
+        Encoder::new(&mut buf).bytes(&oid_bytes(&oid)).unwrap();
+        let mut d = Decoder::new(&buf);
+        assert_eq!(decode_oid(&mut d).unwrap(), oid);
+    }
+
+    #[test]
+    fn definite_array_len_reads_count() {
+        let mut buf = Vec::new();
+        Encoder::new(&mut buf).array(3).unwrap();
+        let mut d = Decoder::new(&buf);
+        assert_eq!(definite_array_len(&mut d).unwrap(), 3);
+    }
+
+    #[test]
+    fn definite_array_len_rejects_indefinite() {
+        let mut buf = Vec::new();
+        Encoder::new(&mut buf).begin_array().unwrap();
+        let mut d = Decoder::new(&buf);
+        assert!(definite_array_len(&mut d).is_err());
+    }
+
+    #[test]
+    fn biguint_roundtrip() {
+        let n = BigUint::from(0x0102_0304_0506_u64);
+
+        let mut buf = Vec::new();
+        Encoder::new(&mut buf).bytes(&biguint_bytes(&n)).unwrap();
+        let mut d = Decoder::new(&buf);
+        assert_eq!(read_biguint(&mut d).unwrap(), n);
+    }
+
+    #[test]
+    fn time_roundtrip() {
+        let dt = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        encode_time(&mut e, dt).unwrap();
+        let mut d = Decoder::new(&buf);
+        assert_eq!(read_time(&mut d).unwrap(), dt);
+    }
+
+    #[test]
+    fn encode_time_rejects_pre_epoch() {
+        let dt = OffsetDateTime::from_unix_timestamp(-1).unwrap();
+
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        assert!(encode_time(&mut e, dt).is_err());
+    }
+
+    #[test]
+    fn raw_item_roundtrip() {
+        let mut buf = Vec::new();
+        Encoder::new(&mut buf).u32(42).unwrap();
+        let mut d = Decoder::new(&buf);
+        let captured = raw_item(&mut d).unwrap();
+        assert_eq!(captured, buf);
+
+        let mut out = Vec::new();
+        let mut e = Encoder::new(&mut out);
+        write_raw(&mut e, &captured).unwrap();
+        assert_eq!(out, buf);
+    }
+
+    fn roundtrip_int_or_oid(value: IntOrOid) -> IntOrOid {
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        value.encode(&mut e).unwrap();
+        let mut d = Decoder::new(&buf);
+        IntOrOid::decode(&mut d).unwrap()
+    }
+
+    #[test]
+    fn int_or_oid_int_form() {
+        let value = IntOrOid::Int(-7);
+        assert_eq!(roundtrip_int_or_oid(value.clone()), value);
+    }
+
+    #[test]
+    fn int_or_oid_oid_form() {
+        let oid = ObjectIdentifier::try_from("1.2.840.113549.1.1.1").unwrap();
+        let value = IntOrOid::Oid(oid);
+        assert_eq!(roundtrip_int_or_oid(value.clone()), value);
+    }
+
+    fn roundtrip_special_text(value: SpecialText) -> SpecialText {
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        value.encode(&mut e).unwrap();
+        let mut d = Decoder::new(&buf);
+        SpecialText::decode(&mut d).unwrap()
+    }
+
+    #[test]
+    fn special_text_text_form() {
+        let value = SpecialText::Text("hello".to_string());
+        assert_eq!(roundtrip_special_text(value.clone()), value);
+        assert_eq!(value.as_text(), Some("hello"));
+    }
+
+    #[test]
+    fn special_text_bytes_form() {
+        let value = SpecialText::Bytes(vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(roundtrip_special_text(value.clone()), value);
+        assert_eq!(value.as_text(), None);
+    }
+
+    #[test]
+    fn special_text_mac_form() {
+        let value = SpecialText::Mac(MacAddr::from([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]));
+        assert_eq!(roundtrip_special_text(value.clone()), value);
+    }
+
+    #[test]
+    fn special_text_rejects_unexpected_tag() {
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        e.tag(Tag::new(1)).unwrap().bytes(&[0x01]).unwrap();
+        let mut d = Decoder::new(&buf);
+        assert!(SpecialText::decode(&mut d).is_err());
+    }
+}
