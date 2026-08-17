@@ -12,4 +12,5 @@ macaddr = "1"
 minicbor = { version = "2.3.0", features = ["std"] }
 num-bigint = "0.4"
 oid = "0.3.0"
+strum = { version = "0.28.0", features = ["derive"] }
 time = "0.3"
