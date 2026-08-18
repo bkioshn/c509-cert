@@ -10,7 +10,7 @@ use c509_cert::{
     RdnAttribute, SpecialText, TbsCertificate,
 };
 use num_bigint::BigUint;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -29,49 +29,49 @@ const COMMON_NAME_ID: u16 = 1;
 /// `dNSName` (Section 8.13 "C509 General Names Registry").
 const GENERAL_NAME_DNS: i32 = 2;
 
-/// Built either by parsing a `--from-json` file, or by [`crate::x509_to_json`]
+/// Built either by parsing a `--from-json` file, or by [`crate::x509_to_c509`]
 /// from a real X.509 certificate. Fields are `pub(crate)` (not part of any
 /// public API) purely so the latter can construct values directly.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JsonCertificate {
     pub(crate) certificate_type: i32,
     pub(crate) serial_number: String,
     pub(crate) issuer_signature_algorithm: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub(crate) issuer: Option<JsonName>,
     pub(crate) validity_not_before: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub(crate) validity_not_after: Option<String>,
     pub(crate) subject: JsonName,
     pub(crate) subject_public_key_algorithm: i32,
     pub(crate) subject_public_key: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub(crate) extensions: Vec<JsonExtension>,
     pub(crate) issuer_signature_value: String,
 }
 
 /// Either a bare string (compact single `commonName`) or a full list of RDN
 /// attributes.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 #[serde(untagged)]
 pub(crate) enum JsonName {
     CommonName(String),
     Attributes(Vec<JsonRdnAttribute>),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 pub(crate) struct JsonRdnAttribute {
     /// Registry id, Section 8.6 "C509 RDN Attributes Registry".
     pub(crate) id: u16,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub(crate) printable_string: bool,
     pub(crate) value: String,
 }
 
 /// Only the most common extensions are supported; anything else must be
 /// added here as this schema grows.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum JsonExtension {
     BasicConstraints {
