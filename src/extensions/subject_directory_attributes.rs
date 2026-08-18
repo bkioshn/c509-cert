@@ -2,19 +2,20 @@
 //! `SubjectDirectoryAttributes = [ + RDNAttributes ]`
 
 use minicbor::{Decoder, Encoder};
-use oid::ObjectIdentifier;
 
-use crate::common::{self, SpecialText};
+use crate::common::{self, RdnAttr, SpecialText};
 use crate::error::{Error, Result};
+
+/// `RDNAttributes = ( attributeType: int, attributeValue: [ + SpecialText] ) //
+///                  ( attributeType: ~oid, attributeValue: [+ bytes] )`
+pub type RDNAttributes = RdnAttr<Vec<SpecialText>, Vec<Vec<u8>>>;
 
 /// `SubjectDirectoryAttributes = [ + RDNAttributes ]`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubjectDirectoryAttributes(pub Vec<RDNAttributes>);
 
 impl SubjectDirectoryAttributes {
-    /// Decode a `SubjectDirectoryAttributes`. Its `+ RDNAttributes` entries are
-    /// flattened `(attributeType, attributeValue)` pairs, so the array length
-    /// is `2 * entries.len()`.
+    /// Decode a `SubjectDirectoryAttributes`.
     pub(crate) fn decode(d: &mut Decoder<'_>) -> Result<Self> {
         let len = common::definite_array_len(d)?;
         if len % 2 != 0 {
@@ -42,93 +43,6 @@ impl SubjectDirectoryAttributes {
     }
 }
 
-/// `RDNAttributes = (
-///     ( attributeType: int, attributeValue: [ + SpecialText] ) //
-///     ( attributeType: ~oid, attributeValue: [+ bytes] )
-///   )`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RDNAttributes {
-    /// `attributeType: int, attributeValue: [ + SpecialText ]`.
-    Registered {
-        /// The attribute type.
-        id: u16,
-        /// Whether the attribute value is a printable string.
-        printable_string: bool,
-        /// The attribute values.
-        values: Vec<SpecialText>,
-    },
-    /// `attributeType: ~oid, attributeValue: [ + bytes ]`.
-    Oid {
-        /// The attribute type.
-        oid: ObjectIdentifier,
-        /// The attribute values.
-        values: Vec<Vec<u8>>,
-    },
-}
-
-impl RDNAttributes {
-    /// Decode a single `RDNAttributes` entry.
-    fn decode(d: &mut Decoder<'_>) -> Result<Self> {
-        match common::RdnAttributeType::decode(d)? {
-            common::RdnAttributeType::Oid(oid) => {
-                let n = common::definite_array_len(d)?;
-                let mut values = Vec::with_capacity(n as usize);
-                for _ in 0..n {
-                    values.push(d.bytes()?.to_vec());
-                }
-                Ok(RDNAttributes::Oid { oid, values })
-            }
-            common::RdnAttributeType::Registered {
-                id,
-                printable_string,
-            } => {
-                let n = common::definite_array_len(d)?;
-                let mut values = Vec::with_capacity(n as usize);
-                for _ in 0..n {
-                    values.push(SpecialText::decode(d)?);
-                }
-                Ok(RDNAttributes::Registered {
-                    id,
-                    printable_string,
-                    values,
-                })
-            }
-        }
-    }
-
-    /// Encode a single `RDNAttributes` entry.
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut Encoder<W>,
-    ) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
-        match self {
-            RDNAttributes::Registered {
-                id,
-                printable_string,
-                values,
-            } => {
-                common::RdnAttributeType::Registered {
-                    id: *id,
-                    printable_string: *printable_string,
-                }
-                .encode(e)?;
-                e.array(values.len() as u64)?;
-                for val in values {
-                    val.encode(e)?;
-                }
-            }
-            RDNAttributes::Oid { oid, values } => {
-                common::RdnAttributeType::Oid(oid.clone()).encode(e)?;
-                e.array(values.len() as u64)?;
-                for val in values {
-                    e.bytes(val)?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,7 +60,7 @@ mod tests {
         let attrs = SubjectDirectoryAttributes(vec![RDNAttributes::Registered {
             id: 3,
             printable_string: false,
-            values: vec![SpecialText::Text("example".to_string())],
+            value: vec![SpecialText::Text("example".to_string())],
         }]);
         assert_eq!(roundtrip(&attrs), attrs);
     }
@@ -156,7 +70,7 @@ mod tests {
         let attrs = SubjectDirectoryAttributes(vec![RDNAttributes::Registered {
             id: 3,
             printable_string: true,
-            values: vec![
+            value: vec![
                 SpecialText::Text("US".to_string()),
                 SpecialText::Text("CA".to_string()),
             ],
@@ -167,8 +81,8 @@ mod tests {
     #[test]
     fn oid_attribute_roundtrip() {
         let attrs = SubjectDirectoryAttributes(vec![RDNAttributes::Oid {
-            oid: ObjectIdentifier::try_from("1.2.3.4.5").unwrap(),
-            values: vec![vec![0xde, 0xad, 0xbe, 0xef]],
+            oid: oid::ObjectIdentifier::try_from("1.2.3.4.5").unwrap(),
+            value: vec![vec![0xde, 0xad, 0xbe, 0xef]],
         }]);
         assert_eq!(roundtrip(&attrs), attrs);
     }
@@ -179,11 +93,11 @@ mod tests {
             RDNAttributes::Registered {
                 id: 3,
                 printable_string: false,
-                values: vec![SpecialText::Text("example".to_string())],
+                value: vec![SpecialText::Text("example".to_string())],
             },
             RDNAttributes::Oid {
-                oid: ObjectIdentifier::try_from("1.2.3.4.5").unwrap(),
-                values: vec![vec![1, 2, 3]],
+                oid: oid::ObjectIdentifier::try_from("1.2.3.4.5").unwrap(),
+                value: vec![vec![1, 2, 3]],
             },
         ]);
         assert_eq!(roundtrip(&attrs), attrs);
