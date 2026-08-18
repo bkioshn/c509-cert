@@ -35,6 +35,7 @@ use crate::name::Name;
 /// The number of fields represent in array form.
 const FIELD_COUNT: u64 = 11;
 
+/// A To Be Signed certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TbsCertificate {
     /// The X.509 certificate type `2` for natively signed certificate
@@ -63,6 +64,7 @@ pub struct TbsCertificate {
     pub extensions: Extensions,
 }
 
+/// A Cbor-encoded X.509 certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct C509Certificate {
     /// The TBS (To Be Signed) certificate.
@@ -72,9 +74,7 @@ pub struct C509Certificate {
 }
 
 impl C509Certificate {
-    /// Decode a `C509Certificate` CBOR item (the wrapped array form:
-    /// `[ TBSCertificate, issuerSignatureValue ]`, i.e. one 11-element
-    /// array on the wire).
+    /// Decode a `C509Certificate`
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         minicbor::decode(bytes).map_err(Error::from)
     }
@@ -87,7 +87,7 @@ impl C509Certificate {
         Self::decode_fields(&mut d)
     }
 
-    /// Encode as the wrapped `C509Certificate` CBOR array item.
+    /// Encode a `C509Certificate`
     pub fn encode(&self) -> Vec<u8> {
         minicbor::to_vec(self).expect("Vec<u8> writer is infallible")
     }

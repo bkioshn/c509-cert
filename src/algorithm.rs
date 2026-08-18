@@ -17,6 +17,7 @@ use oid::ObjectIdentifier;
 use crate::common;
 use crate::error::{Error, Result};
 
+/// An algorithm identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AlgorithmIdentifier {
     /// A registry value from Section 8.14 (signature algorithms) or Section
@@ -31,6 +32,7 @@ pub enum AlgorithmIdentifier {
 }
 
 impl AlgorithmIdentifier {
+    /// Decode an `AlgorithmIdentifier`.
     pub(crate) fn decode(d: &mut Decoder<'_>) -> Result<Self> {
         match d.datatype()? {
             // [ algorithm: ~oid, parameters: bytes ]
@@ -58,6 +60,7 @@ impl AlgorithmIdentifier {
         }
     }
 
+    /// Encode an `AlgorithmIdentifier`.
     pub(crate) fn encode<W: minicbor::encode::Write>(
         &self,
         e: &mut Encoder<W>,
