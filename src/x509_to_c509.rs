@@ -47,11 +47,7 @@ pub(crate) fn convert_to_bytes(input: &[u8], sequence: bool) -> Result<Vec<u8>, 
 /// Parse `input` as PEM (if it looks like a `-----BEGIN` block) or raw DER,
 /// and convert it to the `--from-json` schema.
 fn convert(input: &[u8]) -> Result<JsonCertificate, String> {
-    let looks_like_pem = input
-        .iter()
-        .take(1024)
-        .copied()
-        .collect::<Vec<u8>>()
+    let looks_like_pem = input[..input.len().min(1024)]
         .windows(11)
         .any(|w| w == b"-----BEGIN ");
     if looks_like_pem {
@@ -129,8 +125,13 @@ fn convert_certificate(cert: &X509Certificate<'_>) -> Result<JsonCertificate, St
     if let Some(ext) = tbs
         .get_extension_unique(&OID_X509_EXT_AUTHORITY_KEY_IDENTIFIER)
         .map_err(|e| format!("authorityKeyIdentifier: {e}"))?
-        && let ParsedExtension::AuthorityKeyIdentifier(aki) = ext.parsed_extension()
     {
+        let ParsedExtension::AuthorityKeyIdentifier(aki) = ext.parsed_extension() else {
+            return Err(format!(
+                "authorityKeyIdentifier: could not parse this extension's form ({:?})",
+                ext.parsed_extension()
+            ));
+        };
         let Some(key_identifier) = &aki.key_identifier else {
             return Err(
                 "authorityKeyIdentifier: only the keyIdentifier form is supported by this converter"
@@ -171,47 +172,56 @@ fn rfc3339(unix_timestamp: i64) -> Result<String, String> {
         .map_err(|e| format!("failed to format timestamp: {e}"))
 }
 
+/// Look up `oid` in a `(Oid, value)` table, returning the mapped value if
+/// found. Shared by every OID->registry-id mapping in this file so adding a
+/// new recognized OID is a one-line table edit.
+fn lookup_oid<T: Copy>(oid: &Oid<'_>, table: &[(Oid<'static>, T)]) -> Option<T> {
+    table.iter().find(|(o, _)| o == oid).map(|(_, v)| *v)
+}
+
 /// Section 8.14 "C509 Signature Algorithms Registry" entries this converter
 /// recognizes.
+const SIGNATURE_ALGORITHM_OIDS: &[(Oid<'static>, i32)] = &[
+    (OID_SIG_ECDSA_WITH_SHA256, 0),
+    (OID_SIG_ECDSA_WITH_SHA384, 1),
+    (OID_SIG_ECDSA_WITH_SHA512, 2),
+    (OID_SIG_ED25519, 12),
+    (OID_SIG_ED448, 13),
+    (OID_PKCS1_SHA256WITHRSA, 23),
+    (OID_PKCS1_SHA384WITHRSA, 24),
+    (OID_PKCS1_SHA512WITHRSA, 25),
+];
+
 fn signature_algorithm_id(oid: &Oid<'_>) -> Result<i32, String> {
-    Ok(if *oid == OID_SIG_ECDSA_WITH_SHA256 {
-        0
-    } else if *oid == OID_SIG_ECDSA_WITH_SHA384 {
-        1
-    } else if *oid == OID_SIG_ECDSA_WITH_SHA512 {
-        2
-    } else if *oid == OID_SIG_ED25519 {
-        12
-    } else if *oid == OID_SIG_ED448 {
-        13
-    } else if *oid == OID_PKCS1_SHA256WITHRSA {
-        23
-    } else if *oid == OID_PKCS1_SHA384WITHRSA {
-        24
-    } else if *oid == OID_PKCS1_SHA512WITHRSA {
-        25
-    } else {
-        return Err(format!(
+    lookup_oid(oid, SIGNATURE_ALGORITHM_OIDS).ok_or_else(|| {
+        format!(
             "issuerSignatureAlgorithm: unrecognized OID {oid} (this converter only knows a \
-             handful of common algorithms; extend `signature_algorithm_id` in x509_to_c509.rs)"
-        ));
+             handful of common algorithms; extend SIGNATURE_ALGORITHM_OIDS in x509_to_c509.rs)"
+        )
     })
 }
 
 /// Section 8.15 "C509 Public Key Algorithms Registry" entries this
 /// converter recognizes.
+const PUBLIC_KEY_ALGORITHM_OIDS: &[(Oid<'static>, i32)] = &[
+    (OID_PKCS1_RSAENCRYPTION, 0),
+    (OID_SIG_ED25519, 12),
+    (OID_SIG_ED448, 13),
+];
+
+/// EC curves this converter recognizes for the `id-ecPublicKey` algorithm.
+const EC_CURVE_OIDS: &[(Oid<'static>, i32)] = &[
+    (OID_EC_P256, 1),
+    (OID_NIST_EC_P384, 2),
+    (OID_NIST_EC_P521, 3),
+];
+
 fn public_key_algorithm_id(
     alg: &x509_parser::x509::AlgorithmIdentifier<'_>,
 ) -> Result<i32, String> {
     let oid = &alg.algorithm;
-    if *oid == OID_PKCS1_RSAENCRYPTION {
-        return Ok(0);
-    }
-    if *oid == OID_SIG_ED25519 {
-        return Ok(12);
-    }
-    if *oid == OID_SIG_ED448 {
-        return Ok(13);
+    if let Some(id) = lookup_oid(oid, PUBLIC_KEY_ALGORITHM_OIDS) {
+        return Ok(id);
     }
     if *oid == OID_KEY_TYPE_EC_PUBLIC_KEY {
         let curve = alg
@@ -222,23 +232,16 @@ fn public_key_algorithm_id(
             })?
             .oid()
             .map_err(|e| format!("subjectPublicKeyAlgorithm: EC curve parameter: {e}"))?;
-        return Ok(if curve == OID_EC_P256 {
-            1
-        } else if curve == OID_NIST_EC_P384 {
-            2
-        } else if curve == OID_NIST_EC_P521 {
-            3
-        } else {
-            return Err(format!(
+        return lookup_oid(&curve, EC_CURVE_OIDS).ok_or_else(|| {
+            format!(
                 "subjectPublicKeyAlgorithm: unrecognized EC curve OID {curve} (this converter \
-                 only knows P-256/P-384/P-521; extend `public_key_algorithm_id` in \
-                 x509_to_c509.rs)"
-            ));
+                 only knows P-256/P-384/P-521; extend EC_CURVE_OIDS in x509_to_c509.rs)"
+            )
         });
     }
     Err(format!(
         "subjectPublicKeyAlgorithm: unrecognized OID {oid} (this converter only knows a handful \
-         of common algorithms; extend `public_key_algorithm_id` in x509_to_c509.rs)"
+         of common algorithms; extend PUBLIC_KEY_ALGORITHM_OIDS in x509_to_c509.rs)"
     ))
 }
 
@@ -272,52 +275,32 @@ fn extended_key_usage_ids(eku: &x509_parser::extensions::ExtendedKeyUsage<'_>) -
 
 /// Section 8.6 "C509 RDN Attributes Registry" entries this converter
 /// recognizes.
+const RDN_ATTRIBUTE_OIDS: &[(Oid<'static>, u16)] = &[
+    (OID_PKCS9_EMAIL_ADDRESS, 0),
+    (OID_X509_COMMON_NAME, 1),
+    (OID_X509_SURNAME, 2),
+    (OID_X509_SERIALNUMBER, 3),
+    (OID_X509_COUNTRY_NAME, 4),
+    (OID_X509_LOCALITY_NAME, 5),
+    (OID_X509_STATE_OR_PROVINCE_NAME, 6),
+    (OID_X509_STREET_ADDRESS, 7),
+    (OID_X509_ORGANIZATION_NAME, 8),
+    (OID_X509_ORGANIZATIONAL_UNIT, 9),
+    (OID_X509_TITLE, 10),
+    (OID_X509_BUSINESS_CATEGORY, 11),
+    (OID_X509_POSTAL_CODE, 12),
+    (OID_X509_GIVEN_NAME, 13),
+    (OID_X509_INITIALS, 14),
+    (OID_X509_GENERATION_QUALIFIER, 15),
+    (OID_X509_DN_QUALIFIER, 16),
+    (OID_DOMAIN_COMPONENT, 22),
+    (OID_X509_NAME, 25),
+    (OID_USERID, 28),
+    (OID_PKCS9_UNSTRUCTURED_NAME, 29),
+];
+
 fn rdn_attribute_id(oid: &Oid<'_>) -> Option<u16> {
-    Some(if *oid == OID_PKCS9_EMAIL_ADDRESS {
-        0
-    } else if *oid == OID_X509_COMMON_NAME {
-        1
-    } else if *oid == OID_X509_SURNAME {
-        2
-    } else if *oid == OID_X509_SERIALNUMBER {
-        3
-    } else if *oid == OID_X509_COUNTRY_NAME {
-        4
-    } else if *oid == OID_X509_LOCALITY_NAME {
-        5
-    } else if *oid == OID_X509_STATE_OR_PROVINCE_NAME {
-        6
-    } else if *oid == OID_X509_STREET_ADDRESS {
-        7
-    } else if *oid == OID_X509_ORGANIZATION_NAME {
-        8
-    } else if *oid == OID_X509_ORGANIZATIONAL_UNIT {
-        9
-    } else if *oid == OID_X509_TITLE {
-        10
-    } else if *oid == OID_X509_BUSINESS_CATEGORY {
-        11
-    } else if *oid == OID_X509_POSTAL_CODE {
-        12
-    } else if *oid == OID_X509_GIVEN_NAME {
-        13
-    } else if *oid == OID_X509_INITIALS {
-        14
-    } else if *oid == OID_X509_GENERATION_QUALIFIER {
-        15
-    } else if *oid == OID_X509_DN_QUALIFIER {
-        16
-    } else if *oid == OID_DOMAIN_COMPONENT {
-        22
-    } else if *oid == OID_X509_NAME {
-        25
-    } else if *oid == OID_USERID {
-        28
-    } else if *oid == OID_PKCS9_UNSTRUCTURED_NAME {
-        29
-    } else {
-        return None;
-    })
+    lookup_oid(oid, RDN_ATTRIBUTE_OIDS)
 }
 
 fn name_to_json(name: &x509_parser::x509::X509Name<'_>) -> Result<JsonName, String> {

@@ -43,9 +43,57 @@ impl BasicConstraints {
                 e.i32(-1)?;
             }
             BasicConstraints::Ca { path_len: Some(n) } => {
-                e.i32(*n as i32)?;
+                let n = i32::try_from(*n).map_err(|_| {
+                    minicbor::encode::Error::message(
+                        "pathLenConstraint too large to encode as a signed CBOR int",
+                    )
+                })?;
+                e.i32(n)?;
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roundtrip(value: &BasicConstraints) -> BasicConstraints {
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        value.encode(&mut e).unwrap();
+        let mut d = Decoder::new(&buf);
+        BasicConstraints::decode(&mut d).unwrap()
+    }
+
+    #[test]
+    fn not_ca_roundtrip() {
+        let value = BasicConstraints::NotCa;
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn ca_without_path_len_roundtrip() {
+        let value = BasicConstraints::Ca { path_len: None };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn ca_with_path_len_roundtrip() {
+        let value = BasicConstraints::Ca { path_len: Some(3) };
+        assert_eq!(roundtrip(&value), value);
+    }
+
+    #[test]
+    fn ca_path_len_too_large_is_rejected() {
+        // u32::MAX - 1 would previously wrap through `as i32` into -2, the
+        // NotCa sentinel, silently turning a CA cert into a non-CA one.
+        let value = BasicConstraints::Ca {
+            path_len: Some(u32::MAX - 1),
+        };
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        assert!(value.encode(&mut e).is_err());
     }
 }

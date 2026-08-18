@@ -69,7 +69,7 @@ impl RdnValue for Vec<u8> {
 impl<T: RdnValue> RdnValue for Vec<T> {
     fn decode(d: &mut Decoder<'_>) -> Result<Self> {
         let n = definite_array_len(d)?;
-        let mut out = Vec::with_capacity(n as usize);
+        let mut out = Vec::with_capacity(bounded_capacity(d, n));
         for _ in 0..n {
             out.push(T::decode(d)?);
         }
@@ -119,8 +119,11 @@ impl<S: RdnValue, B: RdnValue> RdnAttr<S, B> {
             }
             _ => {
                 let raw = d.i32()?;
+                let id = u16::try_from(raw.unsigned_abs()).map_err(|_| {
+                    Error::malformed("attributeType out of range for a registered id")
+                })?;
                 Ok(RdnAttr::Registered {
-                    id: raw.unsigned_abs() as u16,
+                    id,
                     printable_string: raw < 0,
                     value: S::decode(d)?,
                 })
@@ -164,6 +167,16 @@ pub(crate) fn definite_array_len(d: &mut Decoder<'_>) -> Result<u64> {
     d.array()?.ok_or(Error::malformed(
         "indefinite-length arrays are not supported",
     ))
+}
+
+/// A safe initial `Vec` capacity for `n` wire-claimed elements: capped to
+/// the decoder's remaining input length, since every CBOR element takes at
+/// least one byte. Prevents a maliciously large length header (a handful of
+/// wire bytes) from triggering an unbounded allocation before any element
+/// is actually read.
+pub(crate) fn bounded_capacity(d: &Decoder<'_>, n: u64) -> usize {
+    let remaining = d.input().len().saturating_sub(d.position());
+    (n as usize).min(remaining)
 }
 
 /// Read a CBOR array header and error if its element count isn't `want`.
@@ -520,5 +533,17 @@ mod tests {
         e.tag(Tag::new(1)).unwrap().bytes(&[0x01]).unwrap();
         let mut d = Decoder::new(&buf);
         assert!(SpecialText::decode(&mut d).is_err());
+    }
+
+    #[test]
+    fn rdn_attr_registered_id_out_of_range_is_rejected() {
+        // attributeType = 65541, outside 0..=65535 for a registered id
+        // (would previously alias to id 5 via `as u16` truncation).
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        e.i32(65541).unwrap();
+        e.bytes(&[0xAA]).unwrap();
+        let mut d = Decoder::new(&buf);
+        assert!(RdnAttr::<Vec<u8>, Vec<u8>>::decode(&mut d).is_err());
     }
 }

@@ -109,21 +109,21 @@ fn main() {
 
     if let Some(pos) = args.iter().position(|a| a == "--from-json") {
         args.remove(pos);
-        if args.is_empty() {
+        if pos >= args.len() {
             eprintln!("--from-json requires a file path");
             std::process::exit(1);
         }
-        encode_from_json(&args.remove(0), sequence);
+        encode_from_json(&args.remove(pos), sequence);
         return;
     }
 
     if let Some(pos) = args.iter().position(|a| a == "--from-x509") {
         args.remove(pos);
-        if args.is_empty() {
+        if pos >= args.len() {
             eprintln!("--from-x509 requires a file path");
             std::process::exit(1);
         }
-        convert_from_x509(&args.remove(0), sequence);
+        convert_from_x509(&args.remove(pos), sequence);
         return;
     }
 

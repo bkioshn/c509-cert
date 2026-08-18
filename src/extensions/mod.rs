@@ -191,6 +191,35 @@ impl ExtensionValue {
     }
 }
 
+/// Decode a CBOR int whose sign carries criticality (negative = critical),
+/// splitting it into `(magnitude, critical)`. Shared by [`Extension`]'s
+/// general form and [`Extensions`]' compact single-KeyUsage-extension
+/// shortcut. The magnitude is `u32` since `i32::MIN`'s magnitude (2^31)
+/// doesn't fit in `i32`.
+fn decode_critical_magnitude(d: &mut Decoder<'_>) -> Result<(u32, bool)> {
+    let raw = d.i32()?;
+    Ok((raw.unsigned_abs(), raw < 0))
+}
+
+/// Negate `value` when `critical`, then encode as a CBOR int. Errors rather
+/// than overflowing when `critical` and `value` is `i32::MIN` (the one i32
+/// value with no representable negation).
+fn encode_critical_i32<W: minicbor::encode::Write>(
+    e: &mut Encoder<W>,
+    value: i32,
+    critical: bool,
+) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
+    let signed = if critical {
+        value.checked_neg().ok_or_else(|| {
+            minicbor::encode::Error::message("id/value of i32::MIN cannot be marked critical")
+        })?
+    } else {
+        value
+    };
+    e.i32(signed)?;
+    Ok(())
+}
+
 // ================================= Extension ===================================
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,9 +252,7 @@ impl Extension {
                 })
             }
             _ => {
-                let raw_id = d.i32()?;
-                let critical = raw_id < 0;
-                let id = raw_id.unsigned_abs();
+                let (id, critical) = decode_critical_magnitude(d)?;
                 let value = ExtensionValue::decode(id, d)?;
                 Ok(Extension {
                     id: IntOrOid::Int(id as i32),
@@ -243,8 +270,7 @@ impl Extension {
     ) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
         match &self.id {
             IntOrOid::Int(id) => {
-                let signed = if self.critical { -(*id) } else { *id };
-                e.i32(signed)?;
+                encode_critical_i32(e, *id, self.critical)?;
                 self.value.encode(e)?;
             }
             IntOrOid::Oid(oid) => {
@@ -294,9 +320,7 @@ impl Extensions {
             // (registry id 2): sign = criticality, absolute value = the
             // KeyUsage bitmask.
             _ => {
-                let raw = d.i32()?;
-                let critical = raw < 0;
-                let value = raw.unsigned_abs();
+                let (value, critical) = decode_critical_magnitude(d)?;
                 Ok(Extensions(vec![Extension {
                     id: IntOrOid::Int(2),
                     critical,
@@ -317,8 +341,12 @@ impl Extensions {
                 value: ExtensionValue::KeyUsage(v),
             } = &self.0[0]
         {
-            let signed = if *critical { -(*v as i32) } else { *v as i32 };
-            e.i32(signed)?;
+            let magnitude = i32::try_from(*v).map_err(|_| {
+                minicbor::encode::Error::message(
+                    "KeyUsage value too large to encode as a signed CBOR int",
+                )
+            })?;
+            encode_critical_i32(e, magnitude, *critical)?;
             return Ok(());
         }
         e.array(self.0.len() as u64 * 2)?;
@@ -326,5 +354,65 @@ impl Extensions {
             ext.encode(e)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extension_general_form_roundtrip() {
+        let ext = Extension {
+            id: IntOrOid::Int(2),
+            critical: true,
+            value: ExtensionValue::KeyUsage(5),
+        };
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        ext.encode(&mut e).unwrap();
+        let mut d = Decoder::new(&buf);
+        assert_eq!(Extension::decode(&mut d).unwrap(), ext);
+    }
+
+    #[test]
+    fn extension_id_i32_min_critical_is_rejected() {
+        // Negating i32::MIN overflows; encode must error, not panic.
+        let ext = Extension {
+            id: IntOrOid::Int(i32::MIN),
+            critical: true,
+            value: ExtensionValue::KeyUsage(1),
+        };
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        assert!(ext.encode(&mut e).is_err());
+    }
+
+    #[test]
+    fn compact_key_usage_roundtrip() {
+        let exts = Extensions(vec![Extension {
+            id: IntOrOid::Int(2),
+            critical: true,
+            value: ExtensionValue::KeyUsage(5),
+        }]);
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        exts.encode(&mut e).unwrap();
+        let mut d = Decoder::new(&buf);
+        assert_eq!(Extensions::decode(&mut d).unwrap(), exts);
+    }
+
+    #[test]
+    fn compact_key_usage_value_too_large_is_rejected() {
+        // 2^31 doesn't fit in i32 at all, let alone survive negation; would
+        // previously wrap silently via `as i32` instead of erroring.
+        let exts = Extensions(vec![Extension {
+            id: IntOrOid::Int(2),
+            critical: false,
+            value: ExtensionValue::KeyUsage(1 << 31),
+        }]);
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        assert!(exts.encode(&mut e).is_err());
     }
 }

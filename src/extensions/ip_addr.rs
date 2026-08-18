@@ -237,7 +237,7 @@ pub(crate) fn decode_ip_address_families(d: &mut Decoder<'_>) -> Result<Vec<IpAd
             "IPAddrBlocks array length must be a multiple of 3",
         ));
     }
-    let mut out = Vec::with_capacity((len / 3) as usize);
+    let mut out = Vec::with_capacity(crate::common::bounded_capacity(d, len / 3));
     for _ in 0..(len / 3) {
         let afi = d.u16()?;
         let safi = if d.datatype()? == Type::Null {
@@ -273,7 +273,7 @@ fn decode_ip_address_choice(afi: u16, d: &mut Decoder<'_>) -> Result<IpAddressCh
         }
     };
 
-    let mut entries = Vec::with_capacity(len as usize);
+    let mut entries = Vec::with_capacity(crate::common::bounded_capacity(d, len));
     let mut previous: i128 = 0;
     let mut first = true;
     for _ in 0..len {
@@ -317,10 +317,20 @@ fn decode_ip_address_choice(afi: u16, d: &mut Decoder<'_>) -> Result<IpAddressCh
                     if min_raw.is_empty() {
                         return Err(Error::malformed("empty RFC 3779 address byte string"));
                     }
+                    if min_raw[0] != 0 {
+                        return Err(Error::malformed(
+                            "RFC 3779 address range bounds must have unusedBits = 0",
+                        ));
+                    }
                     let min = build_addr(afi, &min_raw[1..], 0x00)?;
                     let max_raw = d.bytes()?;
                     if max_raw.is_empty() {
                         return Err(Error::malformed("empty RFC 3779 address byte string"));
+                    }
+                    if max_raw[0] != 0 {
+                        return Err(Error::malformed(
+                            "RFC 3779 address range bounds must have unusedBits = 0",
+                        ));
                     }
                     let max = build_addr(afi, &max_raw[1..], 0xFF)?;
                     entries.push(IpAddressOrRange::Range { min, max });
@@ -474,7 +484,7 @@ pub(crate) fn decode_as_identifiers(d: &mut Decoder<'_>) -> Result<Option<Vec<As
         return Ok(None);
     }
     let len = crate::common::definite_array_len(d)?;
-    let mut out = Vec::with_capacity(len as usize);
+    let mut out = Vec::with_capacity(crate::common::bounded_capacity(d, len));
     let mut previous: i128 = 0;
     let mut first = true;
     for _ in 0..len {
@@ -597,6 +607,24 @@ mod tests {
             choice: IpAddressChoice::Prefixes(vec![IpAddressOrRange::Range { min, max }]),
         }];
         assert_eq!(roundtrip_families(families.clone()), families);
+    }
+
+    #[test]
+    fn address_range_nonzero_unused_bits_is_rejected() {
+        // Same shape as address_range_roundtrip's raw-bytes Range form, but
+        // the min bound's leading unusedBits byte is 1 instead of the 0 this
+        // crate's own encoder always writes there.
+        let mut buf = Vec::new();
+        let mut e = Encoder::new(&mut buf);
+        e.array(3).unwrap();
+        e.u16(1).unwrap(); // AFI = IPv4
+        e.null().unwrap();
+        e.array(1).unwrap();
+        e.array(2).unwrap();
+        e.bytes(&[0x01, 0xC0, 0xA8, 0x01, 0x00]).unwrap(); // min, unusedBits = 1
+        e.bytes(&[0x00, 0xC0, 0xA8, 0x01, 0xFF]).unwrap(); // max, unusedBits = 0
+        let mut d = Decoder::new(&buf);
+        assert!(decode_ip_address_families(&mut d).is_err());
     }
 
     #[test]
