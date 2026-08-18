@@ -28,6 +28,133 @@ pub(crate) fn oid_bytes(oid: &ObjectIdentifier) -> Vec<u8> {
     Vec::from(oid)
 }
 
+/// An `attributeValue`: [`SpecialText`] and `Vec<u8>` decode/encode a single
+/// value; `Vec<T>` for any `T: RdnValue` wraps it in the `[ + T ]` array form
+/// used by the multi-valued `RDNAttributes`.
+pub trait RdnValue: Sized {
+    fn decode(d: &mut Decoder<'_>) -> Result<Self>;
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+    ) -> core::result::Result<(), minicbor::encode::Error<W::Error>>;
+}
+
+impl RdnValue for SpecialText {
+    fn decode(d: &mut Decoder<'_>) -> Result<Self> {
+        SpecialText::decode(d)
+    }
+
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+    ) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
+        SpecialText::encode(self, e)
+    }
+}
+
+impl RdnValue for Vec<u8> {
+    fn decode(d: &mut Decoder<'_>) -> Result<Self> {
+        Ok(d.bytes()?.to_vec())
+    }
+
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+    ) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
+        e.bytes(self)?;
+        Ok(())
+    }
+}
+
+impl<T: RdnValue> RdnValue for Vec<T> {
+    fn decode(d: &mut Decoder<'_>) -> Result<Self> {
+        let n = definite_array_len(d)?;
+        let mut out = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            out.push(T::decode(d)?);
+        }
+        Ok(out)
+    }
+
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+    ) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
+        e.array(self.len() as u64)?;
+        for v in self {
+            v.encode(e)?;
+        }
+        Ok(())
+    }
+}
+
+/// `RDNAttribute` ([`crate::name::RdnAttribute`], single-valued: `S`/`B` are
+/// bare values) and `RDNAttributes` ([`crate::extensions::RdnAttributes`],
+/// multi-valued: `S`/`B` are `Vec`s) share this shape:
+/// `( attributeType: int, attributeValue: S ) // ( attributeType: ~oid, attributeValue: B )`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RdnAttr<S, B> {
+    Registered {
+        id: u16,
+        printable_string: bool,
+        value: S,
+    },
+    Oid {
+        oid: ObjectIdentifier,
+        value: B,
+    },
+}
+
+impl<S: RdnValue, B: RdnValue> RdnAttr<S, B> {
+    /// Decode a `RdnAttr`. The `attributeType`'s sign selects `printableString`
+    /// (negative) vs `utf8String` (positive) for the registered-id form.
+    pub(crate) fn decode(d: &mut Decoder<'_>) -> Result<Self> {
+        match d.datatype()? {
+            Type::Bytes => {
+                let oid = decode_oid(d)?;
+                Ok(RdnAttr::Oid {
+                    oid,
+                    value: B::decode(d)?,
+                })
+            }
+            _ => {
+                let raw = d.i32()?;
+                Ok(RdnAttr::Registered {
+                    id: raw.unsigned_abs() as u16,
+                    printable_string: raw < 0,
+                    value: S::decode(d)?,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+    ) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
+        match self {
+            RdnAttr::Registered {
+                id,
+                printable_string,
+                value,
+            } => {
+                let raw = if *printable_string {
+                    -(*id as i32)
+                } else {
+                    *id as i32
+                };
+                e.i32(raw)?;
+                value.encode(e)?;
+            }
+            RdnAttr::Oid { oid, value } => {
+                e.bytes(&oid_bytes(oid))?;
+                value.encode(e)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// CBOR tag for a CBOR-tagged MAC address (EUI-48/EUI-64).
 pub const MAC_ADDRESS_TAG: u64 = 48;
 
@@ -37,6 +164,41 @@ pub(crate) fn definite_array_len(d: &mut Decoder<'_>) -> Result<u64> {
     d.array()?.ok_or(Error::malformed(
         "indefinite-length arrays are not supported",
     ))
+}
+
+/// Read a CBOR array header and error if its element count isn't `want`.
+pub(crate) fn expect_array_len(d: &mut Decoder<'_>, want: u64) -> Result<()> {
+    let len = definite_array_len(d)?;
+    if len != want {
+        return Err(Error::malformed("unexpected array length"));
+    }
+    Ok(())
+}
+
+/// Decode a `uint / null` field into an `Option<u32>`.
+pub(crate) fn decode_opt_uint(d: &mut Decoder<'_>) -> Result<Option<u32>> {
+    if d.datatype()? == Type::Null {
+        d.null()?;
+        Ok(None)
+    } else {
+        Ok(Some(d.u32()?))
+    }
+}
+
+/// Encode an `Option<u32>` as the `uint / null` field read by [`decode_opt_uint`].
+pub(crate) fn encode_opt_uint<W: minicbor::encode::Write>(
+    e: &mut minicbor::Encoder<W>,
+    v: Option<u32>,
+) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
+    match v {
+        Some(n) => {
+            e.u32(n)?;
+        }
+        None => {
+            e.null()?;
+        }
+    }
+    Ok(())
 }
 
 /// Decode a big-endian unsigned integer from a CBOR byte string.
