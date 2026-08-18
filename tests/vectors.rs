@@ -4,13 +4,13 @@
 use std::net::IpAddr;
 
 use c509_cert::{
-    AlgorithmIdentifier, C509Certificate, Extension, ExtensionValue, IntOrOid, IpAddressChoice, IpAddressOrRange,
-    Name, RdnAttribute, SpecialText,
+    AlgorithmIdentifier, C509Certificate, ExtKeyUsage, Extension, ExtensionValue, IntOrOid,
+    IpAddressChoice, IpAddressOrRange, Name, RdnAttribute, SpecialText,
 };
 use ipnet::IpNet;
 use macaddr::MacAddr;
-use minicbor::data::Tag;
 use minicbor::Encoder;
+use minicbor::data::Tag;
 use num_bigint::BigUint;
 use time::OffsetDateTime;
 
@@ -44,7 +44,7 @@ const A1_2_NATIVE: &str = "
     02
     43 01 F5 0D
     00
-    6B 52 46 43 20 74 65 73 74 20 43 41
+    6B 52 46 43 20 74 65 3 74 20 43 41
     1A 63 B0 CD 00
     1A 69 55 B9 00
     D8 30 46 01 23 45 67 89 AB
@@ -59,11 +59,13 @@ const A1_2_NATIVE: &str = "
 
 fn expect_compact_common_name(name: &Name, text: &str) {
     match name.0.as_slice() {
-        [RdnAttribute::Registered {
-            id: 1,
-            printable_string: false,
-            value: SpecialText::Text(s),
-        }] => assert_eq!(s, text),
+        [
+            RdnAttribute::Registered {
+                id: 1,
+                printable_string: false,
+                value: SpecialText::Text(s),
+            },
+        ] => assert_eq!(s, text),
         other => panic!("expected compact commonName {text:?}, got {other:?}"),
     }
 }
@@ -75,8 +77,14 @@ fn appendix_a1_1_der_reencoded_roundtrip() {
 
     let cert = C509Certificate::decode_sequence(&bytes).expect("decode_sequence");
     assert_eq!(cert.tbs.c509_certificate_type, 3);
-    assert_eq!(cert.tbs.certificate_serial_number, BigUint::from(128_269u32));
-    assert_eq!(cert.tbs.issuer_signature_algorithm, AlgorithmIdentifier::Int(0));
+    assert_eq!(
+        cert.tbs.certificate_serial_number,
+        BigUint::from(128_269u32)
+    );
+    assert_eq!(
+        cert.tbs.issuer_signature_algorithm,
+        AlgorithmIdentifier::Int(0)
+    );
     expect_compact_common_name(cert.tbs.issuer.as_ref().unwrap(), "RFC test CA");
     assert_eq!(
         cert.tbs.validity_not_before,
@@ -88,17 +96,25 @@ fn appendix_a1_1_der_reencoded_roundtrip() {
     );
 
     match cert.tbs.subject.0.as_slice() {
-        [RdnAttribute::Registered {
-            id: 1,
-            printable_string: false,
-            value: SpecialText::Mac(mac),
-        }] => assert_eq!(*mac, MacAddr::from([0x01, 0x23, 0x45, 0x67, 0x89, 0xAB])),
+        [
+            RdnAttribute::Registered {
+                id: 1,
+                printable_string: false,
+                value: SpecialText::Mac(mac),
+            },
+        ] => assert_eq!(*mac, MacAddr::from([0x01, 0x23, 0x45, 0x67, 0x89, 0xAB])),
         other => panic!("unexpected subject: {other:?}"),
     }
 
-    assert_eq!(cert.tbs.subject_public_key_algorithm, AlgorithmIdentifier::Int(1));
+    assert_eq!(
+        cert.tbs.subject_public_key_algorithm,
+        AlgorithmIdentifier::Int(1)
+    );
     assert_eq!(cert.tbs.subject_public_key.len(), 33);
-    assert_eq!(cert.tbs.subject_public_key[0], 0xFE, "point-compressed, even y");
+    assert_eq!(
+        cert.tbs.subject_public_key[0], 0xFE,
+        "point-compressed, even y"
+    );
 
     assert_eq!(cert.tbs.extensions.0.len(), 1);
     match &cert.tbs.extensions.0[0] {
@@ -115,7 +131,10 @@ fn appendix_a1_1_der_reencoded_roundtrip() {
     // Round trip: both the bare-sequence form and the wrapped-array form.
     assert_eq!(cert.encode_sequence(), bytes);
     let wrapped = cert.encode();
-    assert_eq!(C509Certificate::decode(&wrapped).expect("decode wrapped"), cert);
+    assert_eq!(
+        C509Certificate::decode(&wrapped).expect("decode wrapped"),
+        cert
+    );
 }
 
 #[test]
@@ -125,10 +144,16 @@ fn appendix_a1_2_natively_signed_roundtrip() {
 
     let cert = C509Certificate::decode_sequence(&bytes).expect("decode_sequence");
     assert_eq!(cert.tbs.c509_certificate_type, 2);
-    assert_eq!(cert.tbs.certificate_serial_number, BigUint::from(128_269u32));
+    assert_eq!(
+        cert.tbs.certificate_serial_number,
+        BigUint::from(128_269u32)
+    );
     expect_compact_common_name(cert.tbs.issuer.as_ref().unwrap(), "RFC test CA");
     assert_eq!(cert.tbs.subject_public_key.len(), 33);
-    assert_eq!(cert.tbs.subject_public_key[0], 0x02, "uncompressed-form octet, not point-compressed");
+    assert_eq!(
+        cert.tbs.subject_public_key[0], 0x02,
+        "uncompressed-form octet, not point-compressed"
+    );
     assert_eq!(cert.issuer_signature_value.len(), 64);
 
     assert_eq!(cert.encode_sequence(), bytes);
@@ -140,7 +165,9 @@ fn appendix_a1_2_natively_signed_roundtrip() {
 /// the extension decoder through the public API (its own `decode`/`encode`
 /// methods are crate-private) with worked examples from the draft that
 /// aren't full certificates.
-fn build_cert_with_extensions(encode_extensions: impl FnOnce(&mut Encoder<&mut Vec<u8>>)) -> Vec<u8> {
+fn build_cert_with_extensions(
+    encode_extensions: impl FnOnce(&mut Encoder<&mut Vec<u8>>),
+) -> Vec<u8> {
     let mut buf = Vec::new();
     {
         let mut e = Encoder::new(&mut buf);
@@ -151,7 +178,10 @@ fn build_cert_with_extensions(encode_extensions: impl FnOnce(&mut Encoder<&mut V
         e.str("RFC test CA").unwrap(); // issuer (compact commonName)
         e.u64(1_672_531_200).unwrap(); // validityNotBefore
         e.u64(1_767_225_600).unwrap(); // validityNotAfter
-        e.tag(Tag::new(48)).unwrap().bytes(&hex("0123456789AB")).unwrap(); // subject
+        e.tag(Tag::new(48))
+            .unwrap()
+            .bytes(&hex("0123456789AB"))
+            .unwrap(); // subject
         e.i32(1).unwrap(); // subjectPublicKeyAlgorithm
         e.bytes(&hex("AABBCCDD")).unwrap(); // subjectPublicKey (dummy, opaque)
         encode_extensions(&mut e); // extensions
@@ -199,17 +229,19 @@ fn section_3_3_1_extension_array_example() {
     assert!(!exts[2].critical);
     assert_eq!(
         exts[2].value,
-        ExtensionValue::ExtKeyUsage(vec![IntOrOid::Int(3), IntOrOid::Int(9)])
+        ExtensionValue::ExtKeyUsage(ExtKeyUsage(vec![IntOrOid::Int(3), IntOrOid::Int(9)]))
     );
 
     assert_eq!(exts[3].id, IntOrOid::Int(3));
     assert!(!exts[3].critical);
     match &exts[3].value {
         ExtensionValue::SubjectAltName(names) => match names.as_slice() {
-            [c509_cert::GeneralName {
-                kind: 2,
-                value: c509_cert::GeneralNameValue::DnsName(s),
-            }] => assert_eq!(s, "example.com"),
+            [
+                c509_cert::GeneralName {
+                    kind: 2,
+                    value: c509_cert::GeneralNameValue::DnsName(s),
+                },
+            ] => assert_eq!(s, "example.com"),
             other => panic!("unexpected SAN: {other:?}"),
         },
         other => panic!("unexpected extension value: {other:?}"),
@@ -286,7 +318,11 @@ fn appendix_a5_ip_addr_blocks_example() {
     };
     assert_eq!(
         v4,
-        &[net("192.0.2.0/24"), net("198.51.100.0/28"), net("203.0.113.0/24")]
+        &[
+            net("192.0.2.0/24"),
+            net("198.51.100.0/28"),
+            net("203.0.113.0/24")
+        ]
     );
     if let IpAddressOrRange::Prefix(p) = &v4[0] {
         assert_eq!(p.prefix_len(), 24);
