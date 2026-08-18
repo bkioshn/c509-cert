@@ -10,7 +10,7 @@ use c509_cert::{
     RdnAttribute, SpecialText, TbsCertificate,
 };
 use num_bigint::BigUint;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -29,48 +29,51 @@ const COMMON_NAME_ID: u16 = 1;
 /// `dNSName` (Section 8.13 "C509 General Names Registry").
 const GENERAL_NAME_DNS: i32 = 2;
 
-#[derive(Deserialize)]
+/// Built either by parsing a `--from-json` file, or by [`crate::x509_to_json`]
+/// from a real X.509 certificate. Fields are `pub(crate)` (not part of any
+/// public API) purely so the latter can construct values directly.
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct JsonCertificate {
-    certificate_type: i32,
-    serial_number: String,
-    issuer_signature_algorithm: i32,
-    #[serde(default)]
-    issuer: Option<JsonName>,
-    validity_not_before: String,
-    #[serde(default)]
-    validity_not_after: Option<String>,
-    subject: JsonName,
-    subject_public_key_algorithm: i32,
-    subject_public_key: String,
-    #[serde(default)]
-    extensions: Vec<JsonExtension>,
-    issuer_signature_value: String,
+    pub(crate) certificate_type: i32,
+    pub(crate) serial_number: String,
+    pub(crate) issuer_signature_algorithm: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) issuer: Option<JsonName>,
+    pub(crate) validity_not_before: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) validity_not_after: Option<String>,
+    pub(crate) subject: JsonName,
+    pub(crate) subject_public_key_algorithm: i32,
+    pub(crate) subject_public_key: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) extensions: Vec<JsonExtension>,
+    pub(crate) issuer_signature_value: String,
 }
 
 /// Either a bare string (compact single `commonName`) or a full list of RDN
 /// attributes.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(untagged)]
-enum JsonName {
+pub(crate) enum JsonName {
     CommonName(String),
     Attributes(Vec<JsonRdnAttribute>),
 }
 
-#[derive(Deserialize)]
-struct JsonRdnAttribute {
+#[derive(Deserialize, Serialize)]
+pub(crate) struct JsonRdnAttribute {
     /// Registry id, Section 8.6 "C509 RDN Attributes Registry".
-    id: u16,
-    #[serde(default)]
-    printable_string: bool,
-    value: String,
+    pub(crate) id: u16,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) printable_string: bool,
+    pub(crate) value: String,
 }
 
 /// Only the most common extensions are supported; anything else must be
 /// added here as this schema grows.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum JsonExtension {
+pub(crate) enum JsonExtension {
     BasicConstraints {
         #[serde(default)]
         critical: bool,
