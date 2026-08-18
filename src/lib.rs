@@ -1,8 +1,6 @@
 //! A parser/encoder for **C509 Certificates** — the CBOR encoding of X.509
 //! certificates specified by
 //! [`draft-ietf-cose-cbor-encoded-cert-19`](https://datatracker.ietf.org/doc/draft-ietf-cose-cbor-encoded-cert/)
-//! (an active IETF Internet-Draft, not yet an RFC), built on top of
-//! [`minicbor`].
 //!
 //! ```text
 //! C509Certificate = [
@@ -62,14 +60,15 @@ pub use common::{IntOrOid, SpecialText};
 pub use error::{Error, Result};
 pub use extensions::ip_addr::{AsIdOrRange, IpAddressChoice, IpAddressFamily, IpAddressOrRange};
 pub use extensions::{
-    AccessDescription, AuthorityKeyIdentifier, BasicConstraints, DistributionPointName, Extension, Extensions,
-    ExtensionValue, GeneralName, GeneralNameValue, NameConstraints, PolicyConstraints, PolicyInformation,
-    PolicyQualifier, RdnAttributeMulti,
+    AccessDescription, AuthorityKeyIdentifier, BasicConstraints, CertificatePolicies,
+    DistributionPointName, ExtKeyUsage, Extension, ExtensionValue, Extensions, GeneralName,
+    GeneralNameValue, NameConstraints, PolicyConstraints, PolicyIdentifier, PolicyMappings,
+    PolicyQualifierInfo, RdnAttributes, SubjectDirectoryAttributes,
 };
-pub use name::{Name, RdnAttribute};
 /// Re-exported for convenience: used by [`SpecialText::Mac`] and
 /// [`GeneralNameValue::MacAddress`].
 pub use macaddr::MacAddr;
+pub use name::{Name, RdnAttribute};
 /// Re-exported for convenience: used by [`TbsCertificate::certificate_serial_number`]
 /// and [`AuthorityKeyIdentifier::cert_serial`].
 pub use num_bigint::BigUint;

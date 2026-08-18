@@ -30,7 +30,7 @@ impl AuthorityKeyIdentifier {
                 cert_serial: None,
             }),
             _ => {
-                super::expect_array_len(d, 3)?;
+                common::expect_array_len(d, 3)?;
                 let key_identifier = d.bytes()?.to_vec();
                 let cert_issuer = Some(decode_general_names(d)?);
                 let cert_serial = Some(common::read_biguint(d)?);

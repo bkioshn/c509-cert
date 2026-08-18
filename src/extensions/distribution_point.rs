@@ -40,7 +40,7 @@ impl DistributionPointName {
                 let len = common::definite_array_len(d)?;
                 let mut out = Vec::with_capacity(len as usize);
                 for _ in 0..len {
-                    super::expect_array_len(d, 3)?;
+                    common::expect_array_len(d, 3)?;
                     let full_name = match d.datatype()? {
                         Type::String => vec![d.str()?.to_string()],
                         _ => {
@@ -52,7 +52,7 @@ impl DistributionPointName {
                             v
                         }
                     };
-                    let reasons = super::decode_opt_uint(d)?;
+                    let reasons = common::decode_opt_uint(d)?;
                     let crl_issuer = Name::decode_optional(d)?;
                     out.push(DistributionPointName {
                         full_name,
@@ -91,7 +91,7 @@ impl DistributionPointName {
                     }
                 }
             }
-            super::encode_opt_uint(e, dp.reasons)?;
+            common::encode_opt_uint(e, dp.reasons)?;
             Name::encode_optional(&dp.crl_issuer, e)?;
         }
         Ok(())

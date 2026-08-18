@@ -37,7 +37,7 @@ pub use name_constraints::NameConstraints;
 pub use policy::{
     CertificatePolicies, PolicyConstraints, PolicyIdentifier, PolicyMappings, PolicyQualifierInfo,
 };
-pub use subject_directory_attributes::{RDNAttributes, SubjectDirectoryAttributes};
+pub use subject_directory_attributes::{RdnAttributes, SubjectDirectoryAttributes};
 
 use general_name::{decode_alt_name, encode_alt_name};
 use ip_addr::{AsIdOrRange, IpAddressFamily};

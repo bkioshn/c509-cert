@@ -66,7 +66,7 @@ impl GeneralName {
                 GeneralNameValue::SmtpUtf8Mailbox(d.str()?.to_string())
             }
             Some(GeneralNameKind::HardwareModuleName) => {
-                super::expect_array_len(d, 2)?;
+                common::expect_array_len(d, 2)?;
                 let hw_type = common::decode_oid(d)?;
                 let hw_serial_num = d.bytes()?.to_vec();
                 GeneralNameValue::HardwareModuleName {
@@ -75,7 +75,7 @@ impl GeneralName {
                 }
             }
             Some(GeneralNameKind::OtherName) => {
-                super::expect_array_len(d, 2)?;
+                common::expect_array_len(d, 2)?;
                 let type_id = common::decode_oid(d)?;
                 let value = d.bytes()?.to_vec();
                 GeneralNameValue::OtherName { type_id, value }

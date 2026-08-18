@@ -6,6 +6,7 @@ use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
 
 use super::general_name::{GeneralName, decode_general_names, encode_general_names};
+use crate::common;
 use crate::error::Result;
 
 /// An `NameConstraints` extension.
@@ -20,7 +21,7 @@ pub struct NameConstraints {
 impl NameConstraints {
     /// Decode a `NameConstraints`.
     pub(crate) fn decode(d: &mut Decoder<'_>) -> Result<Self> {
-        super::expect_array_len(d, 2)?;
+        common::expect_array_len(d, 2)?;
         let permitted = decode_opt_general_subtree(d)?;
         let excluded = decode_opt_general_subtree(d)?;
         Ok(NameConstraints {
@@ -67,8 +68,8 @@ fn encode_opt_general_subtree<W: minicbor::encode::Write>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::general_name::GeneralNameValue;
     use super::*;
+    use crate::extensions::general_name::GeneralNameValue;
 
     fn roundtrip(nc: &NameConstraints) -> NameConstraints {
         let mut buf = Vec::new();

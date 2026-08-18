@@ -8,11 +8,11 @@ use crate::error::{Error, Result};
 
 /// `RDNAttributes = ( attributeType: int, attributeValue: [ + SpecialText] ) //
 ///                  ( attributeType: ~oid, attributeValue: [+ bytes] )`
-pub type RDNAttributes = RdnAttr<Vec<SpecialText>, Vec<Vec<u8>>>;
+pub type RdnAttributes = RdnAttr<Vec<SpecialText>, Vec<Vec<u8>>>;
 
 /// `SubjectDirectoryAttributes = [ + RDNAttributes ]`
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubjectDirectoryAttributes(pub Vec<RDNAttributes>);
+pub struct SubjectDirectoryAttributes(pub Vec<RdnAttributes>);
 
 impl SubjectDirectoryAttributes {
     /// Decode a `SubjectDirectoryAttributes`.
@@ -25,7 +25,7 @@ impl SubjectDirectoryAttributes {
         }
         let mut out = Vec::with_capacity((len / 2) as usize);
         for _ in 0..(len / 2) {
-            out.push(RDNAttributes::decode(d)?);
+            out.push(RdnAttributes::decode(d)?);
         }
         Ok(Self(out))
     }
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn registered_utf8_attribute_roundtrip() {
-        let attrs = SubjectDirectoryAttributes(vec![RDNAttributes::Registered {
+        let attrs = SubjectDirectoryAttributes(vec![RdnAttributes::Registered {
             id: 3,
             printable_string: false,
             value: vec![SpecialText::Text("example".to_string())],
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn registered_printable_string_attribute_roundtrip() {
-        let attrs = SubjectDirectoryAttributes(vec![RDNAttributes::Registered {
+        let attrs = SubjectDirectoryAttributes(vec![RdnAttributes::Registered {
             id: 3,
             printable_string: true,
             value: vec![
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn oid_attribute_roundtrip() {
-        let attrs = SubjectDirectoryAttributes(vec![RDNAttributes::Oid {
+        let attrs = SubjectDirectoryAttributes(vec![RdnAttributes::Oid {
             oid: oid::ObjectIdentifier::try_from("1.2.3.4.5").unwrap(),
             value: vec![vec![0xde, 0xad, 0xbe, 0xef]],
         }]);
@@ -90,12 +90,12 @@ mod tests {
     #[test]
     fn multiple_attributes_roundtrip() {
         let attrs = SubjectDirectoryAttributes(vec![
-            RDNAttributes::Registered {
+            RdnAttributes::Registered {
                 id: 3,
                 printable_string: false,
                 value: vec![SpecialText::Text("example".to_string())],
             },
-            RDNAttributes::Oid {
+            RdnAttributes::Oid {
                 oid: oid::ObjectIdentifier::try_from("1.2.3.4.5").unwrap(),
                 value: vec![vec![1, 2, 3]],
             },

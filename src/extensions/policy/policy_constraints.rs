@@ -6,8 +6,8 @@
 
 use minicbor::{Decoder, Encoder};
 
+use crate::common::{decode_opt_uint, encode_opt_uint, expect_array_len};
 use crate::error::Result;
-use crate::extensions::{decode_opt_uint, encode_opt_uint, expect_array_len};
 
 /// `PolicyConstraints` = [
 ///     requireExplicitPolicy: uint / null,
