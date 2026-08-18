@@ -1,0 +1,40 @@
+{
+  "certificate_type": 3,
+  "serial_number": "0123456789ABCDEF",
+  "issuer_signature_algorithm": 0,
+  "issuer": [
+    { "id": 4, "value": "US" },
+    { "id": 8, "value": "Example Corp" },
+    { "id": 1, "value": "Example Corp Root CA" }
+  ],
+  "validity_not_before": "2024-01-01T00:00:00Z",
+  "validity_not_after": "2034-01-01T00:00:00Z",
+  "subject": [
+    { "id": 4, "value": "US" },
+    { "id": 6, "value": "California" },
+    { "id": 5, "value": "San Francisco" },
+    { "id": 8, "value": "Example Corp" },
+    { "id": 9, "value": "IoT Devices" },
+    { "id": 1, "value": "device-0123456789ab.example.com" }
+  ],
+  "subject_public_key_algorithm": 1,
+  "subject_public_key": "FEB1216AB96E5B3B3340F5BDF02E693F16213A04525ED44450B1019C2DFD3838AB",
+  "extensions": [
+    { "basic_constraints": { "critical": true, "ca": true, "path_len": 0 } },
+    { "key_usage": { "critical": true, "value": 5 } },
+    { "ext_key_usage": { "critical": false, "oids": [1, 2] } },
+    {
+      "subject_alt_name": {
+        "critical": false,
+        "dns_names": ["device.example.com", "device.example.org"]
+      }
+    },
+    {
+      "authority_key_identifier": {
+        "critical": false,
+        "key_identifier": "AABBCCDDEEFF00112233445566778899AABBCCDD"
+      }
+    }
+  ],
+  "issuer_signature_value": "D4320B1D6849E309219D30037E138166F2508247DDDAE76CCEEA55053C108E90D551F6D60106F1ABB484CFBE6256C178E4AC3314EA19191E8B607DA5AE3BDA16"
+}
