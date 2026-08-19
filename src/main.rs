@@ -5,7 +5,6 @@ use minicbor::Decoder;
 use minicbor::data::Type;
 
 mod cert_json;
-mod x509_to_c509;
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, hex::FromHexError> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
@@ -85,10 +84,15 @@ fn convert_from_x509(path: &str, sequence: bool) {
         eprintln!("failed to read {path}: {e}");
         std::process::exit(1);
     });
-    let bytes = x509_to_c509::convert_to_bytes(&bytes, sequence).unwrap_or_else(|e| {
+    let cert = c509_cert::from_x509(&bytes).unwrap_or_else(|e| {
         eprintln!("failed to convert {path}: {e}");
         std::process::exit(1);
     });
+    let bytes = if sequence {
+        cert.encode_sequence()
+    } else {
+        cert.encode()
+    };
     println!("{}", hex::encode(bytes));
 }
 

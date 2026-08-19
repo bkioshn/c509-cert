@@ -1,28 +1,38 @@
-//! Convert a real X.509 certificate (PEM or DER) into C509 bytes, via the
-//! `--from-json` schema ([`crate::cert_json::JsonCertificate`]) as an
-//! intermediate step. Used by the `--from-x509` CLI option.
+//! Convert a real X.509 certificate (PEM or DER) into a [`C509Certificate`],
+//! via [`from_x509`].
 //!
 //! Targets `c509CertificateType = 3` ("DER re-encoded"): the subject public
 //! key and the signature value are carried through as opaque bytes exactly
 //! as they appear in the DER certificate, with no algorithm-specific
 //! repacking (no EC point compression, no RSA exponent elision, no ECDSA
 //! DER `SEQUENCE(r, s)` -> raw `r‖s` conversion). This is a deliberate
-//! simplification for testing the CLI against real-world certificates, not
-//! a byte-accurate implementation of the draft's DER<->C509 conversion
-//! rules.
+//! simplification, not a byte-accurate implementation of the draft's
+//! DER<->C509 conversion rules.
 //!
 //! Algorithm and RDN-attribute OIDs are mapped to C509 registry ids only
 //! for the well-known, unambiguous cases below (backed by named constants
 //! from the `oid-registry` crate, not hand-typed OID strings); anything
-//! else is reported as an error rather than guessed.
+//! else is reported as an [`Error::X509`] rather than guessed.
 
+use macaddr::MacAddr;
+use num_bigint::BigUint;
 use x509_parser::extensions::{GeneralName as X509GeneralName, ParsedExtension};
 use x509_parser::oid_registry::asn1_rs::{Oid, Tag};
 use x509_parser::oid_registry::*;
 use x509_parser::pem::Pem;
-use x509_parser::prelude::{FromDer, X509Certificate};
+use x509_parser::prelude::{FromDer, X509Certificate as X509Cert};
+use x509_parser::x509::X509Name;
 
-use crate::cert_json::{JsonCertificate, JsonExtension, JsonName, JsonRdnAttribute};
+use crate::algorithm::AlgorithmIdentifier;
+use crate::common::{IntOrOid, SpecialText};
+use crate::error::Error;
+use crate::error::Result;
+use crate::extensions::{
+    AuthorityKeyIdentifier, BasicConstraints, ExtKeyUsage, Extension, ExtensionValue, Extensions,
+    GeneralName, GeneralNameValue,
+};
+use crate::name::{Name, RdnAttribute};
+use crate::{C509Certificate, TbsCertificate};
 
 /// `c509CertificateType = 3`, "CBOR re-encoding of a DER-encoded
 /// certificate" (Section 3.1).
@@ -32,144 +42,168 @@ const CERTIFICATE_TYPE_DER_REENCODED: i32 = 3;
 /// sentinel, mapped to C509's `validityNotAfter = null`.
 const NO_EXPIRATION_TIMESTAMP: i64 = 253_402_300_799;
 
-/// Parse `input` as PEM or DER X.509 and encode it as C509 bytes. `sequence`
-/// selects the bare CBOR Sequence form over the default array-wrapped form,
-/// same as elsewhere in the CLI.
-pub(crate) fn convert_to_bytes(input: &[u8], sequence: bool) -> Result<Vec<u8>, String> {
-    let cert = convert(input)?.into_certificate()?;
-    Ok(if sequence {
-        cert.encode_sequence()
-    } else {
-        cert.encode()
-    })
-}
+/// `dNSName` (Section 8.13 "C509 General Names Registry").
+const GENERAL_NAME_DNS: i32 = 2;
 
-/// Parse `input` as PEM (if it looks like a `-----BEGIN` block) or raw DER,
-/// and convert it to the `--from-json` schema.
-fn convert(input: &[u8]) -> Result<JsonCertificate, String> {
+/// Registry ids (Section 8.8 "C509 Extensions Registry") for the extensions
+/// this converter recognizes.
+const EXT_KEY_USAGE_ID: i32 = 2;
+const EXT_SUBJECT_ALT_NAME_ID: i32 = 3;
+const EXT_BASIC_CONSTRAINTS_ID: i32 = 4;
+const EXT_AUTHORITY_KEY_IDENTIFIER_ID: i32 = 7;
+const EXT_EXT_KEY_USAGE_ID: i32 = 8;
+
+/// Parse `input` as PEM (if it looks like a `-----BEGIN` block) or raw DER
+/// X.509, and convert it straight into a [`C509Certificate`].
+///
+/// See the module docs for exactly what's supported.
+pub fn from_x509(input: &[u8]) -> Result<C509Certificate> {
     let looks_like_pem = input[..input.len().min(1024)]
         .windows(11)
         .any(|w| w == b"-----BEGIN ");
     if looks_like_pem {
-        let (pem, _) = Pem::read(std::io::Cursor::new(input))
-            .map_err(|e| format!("failed to read PEM: {e}"))?;
+        let (pem, _) =
+            Pem::read(std::io::Cursor::new(input)).map_err(|e| x509_err("failed to read PEM", e))?;
         let cert = pem
             .parse_x509()
-            .map_err(|e| format!("failed to parse X.509 DER inside PEM: {e}"))?;
+            .map_err(|e| x509_err("failed to parse X.509 DER inside PEM", e))?;
         convert_certificate(&cert)
     } else {
-        let (_, cert) = X509Certificate::from_der(input)
-            .map_err(|e| format!("failed to parse X.509 DER: {e}"))?;
+        let (_, cert) =
+            X509Cert::from_der(input).map_err(|e| x509_err("failed to parse X.509 DER", e))?;
         convert_certificate(&cert)
     }
 }
 
-fn convert_certificate(cert: &X509Certificate<'_>) -> Result<JsonCertificate, String> {
-    let tbs = &cert.tbs_certificate;
+fn x509_err(context: &str, e: impl std::fmt::Display) -> Error {
+    Error::X509(format!("{context}: {e}"))
+}
 
-    let not_before = tbs.validity().not_before.timestamp();
-    let not_after = tbs.validity().not_after.timestamp();
+fn convert_certificate(cert: &X509Cert<'_>) -> Result<C509Certificate> {
+    let tbs = &cert.tbs_certificate;
+    let validity = tbs.validity();
 
     let mut extensions = Vec::new();
     if let Some(bc) = tbs
         .basic_constraints()
-        .map_err(|e| format!("basicConstraints: {e}"))?
+        .map_err(|e| x509_err("basicConstraints", e))?
     {
-        extensions.push(JsonExtension::BasicConstraints {
+        extensions.push(Extension {
+            id: IntOrOid::Int(EXT_BASIC_CONSTRAINTS_ID),
             critical: bc.critical,
-            ca: bc.value.ca,
-            path_len: bc.value.path_len_constraint,
+            value: ExtensionValue::BasicConstraints(if bc.value.ca {
+                BasicConstraints::Ca {
+                    path_len: bc.value.path_len_constraint,
+                }
+            } else {
+                BasicConstraints::NotCa
+            }),
         });
     }
-    if let Some(ku) = tbs.key_usage().map_err(|e| format!("keyUsage: {e}"))? {
-        extensions.push(JsonExtension::KeyUsage {
+    if let Some(ku) = tbs.key_usage().map_err(|e| x509_err("keyUsage", e))? {
+        extensions.push(Extension {
+            id: IntOrOid::Int(EXT_KEY_USAGE_ID),
             critical: ku.critical,
-            value: ku.value.flags as u32,
+            value: ExtensionValue::KeyUsage(ku.value.flags as u32),
         });
     }
     if let Some(eku) = tbs
         .extended_key_usage()
-        .map_err(|e| format!("extKeyUsage: {e}"))?
+        .map_err(|e| x509_err("extKeyUsage", e))?
     {
         if !eku.value.other.is_empty() {
-            return Err(
+            return Err(Error::X509(
                 "extKeyUsage: OID-form KeyPurposeIds aren't supported by this converter"
                     .to_string(),
-            );
+            ));
         }
-        extensions.push(JsonExtension::ExtKeyUsage {
+        extensions.push(Extension {
+            id: IntOrOid::Int(EXT_EXT_KEY_USAGE_ID),
             critical: eku.critical,
-            oids: extended_key_usage_ids(eku.value),
+            value: ExtensionValue::ExtKeyUsage(ExtKeyUsage(
+                extended_key_usage_ids(eku.value)
+                    .into_iter()
+                    .map(IntOrOid::Int)
+                    .collect(),
+            )),
         });
     }
     if let Some(san) = tbs
         .subject_alternative_name()
-        .map_err(|e| format!("subjectAltName: {e}"))?
+        .map_err(|e| x509_err("subjectAltName", e))?
     {
-        let mut dns_names = Vec::new();
+        let mut names = Vec::new();
         for name in &san.value.general_names {
             match name {
-                X509GeneralName::DNSName(s) => dns_names.push((*s).to_string()),
+                X509GeneralName::DNSName(s) => names.push(GeneralName {
+                    kind: GENERAL_NAME_DNS,
+                    value: GeneralNameValue::DnsName((*s).to_string()),
+                }),
                 other => {
-                    return Err(format!(
+                    return Err(Error::X509(format!(
                         "subjectAltName: only dNSName entries are supported by this converter, found {other:?}"
-                    ));
+                    )));
                 }
             }
         }
-        extensions.push(JsonExtension::SubjectAltName {
+        extensions.push(Extension {
+            id: IntOrOid::Int(EXT_SUBJECT_ALT_NAME_ID),
             critical: san.critical,
-            dns_names,
+            value: ExtensionValue::SubjectAltName(names),
         });
     }
     if let Some(ext) = tbs
         .get_extension_unique(&OID_X509_EXT_AUTHORITY_KEY_IDENTIFIER)
-        .map_err(|e| format!("authorityKeyIdentifier: {e}"))?
+        .map_err(|e| x509_err("authorityKeyIdentifier", e))?
     {
         let ParsedExtension::AuthorityKeyIdentifier(aki) = ext.parsed_extension() else {
-            return Err(format!(
+            return Err(Error::X509(format!(
                 "authorityKeyIdentifier: could not parse this extension's form ({:?})",
                 ext.parsed_extension()
-            ));
+            )));
         };
         let Some(key_identifier) = &aki.key_identifier else {
-            return Err(
+            return Err(Error::X509(
                 "authorityKeyIdentifier: only the keyIdentifier form is supported by this converter"
                     .to_string(),
-            );
+            ));
         };
-        extensions.push(JsonExtension::AuthorityKeyIdentifier {
+        extensions.push(Extension {
+            id: IntOrOid::Int(EXT_AUTHORITY_KEY_IDENTIFIER_ID),
             critical: ext.critical,
-            key_identifier: hex::encode(key_identifier.0),
+            value: ExtensionValue::AuthorityKeyIdentifier(AuthorityKeyIdentifier {
+                key_identifier: key_identifier.0.to_vec(),
+                cert_issuer: None,
+                cert_serial: None,
+            }),
         });
     }
 
-    Ok(JsonCertificate {
-        certificate_type: CERTIFICATE_TYPE_DER_REENCODED,
-        serial_number: hex::encode(tbs.raw_serial()),
-        issuer_signature_algorithm: signature_algorithm_id(&cert.signature_algorithm.algorithm)?,
-        issuer: Some(name_to_json(tbs.issuer())?),
-        validity_not_before: rfc3339(not_before)?,
-        validity_not_after: if not_after == NO_EXPIRATION_TIMESTAMP {
-            None
-        } else {
-            Some(rfc3339(not_after)?)
-        },
-        subject: name_to_json(tbs.subject())?,
-        subject_public_key_algorithm: public_key_algorithm_id(&tbs.subject_pki.algorithm)?,
-        subject_public_key: hex::encode(&tbs.subject_pki.subject_public_key.data),
-        extensions,
-        issuer_signature_value: hex::encode(&cert.signature_value.data),
-    })
-}
+    let validity_not_after = if validity.not_after.timestamp() == NO_EXPIRATION_TIMESTAMP {
+        None
+    } else {
+        Some(validity.not_after.to_datetime())
+    };
 
-fn rfc3339(unix_timestamp: i64) -> Result<String, String> {
-    use time::OffsetDateTime;
-    use time::format_description::well_known::Rfc3339;
-    OffsetDateTime::from_unix_timestamp(unix_timestamp)
-        .map_err(|e| format!("timestamp out of range: {e}"))?
-        .format(&Rfc3339)
-        .map_err(|e| format!("failed to format timestamp: {e}"))
+    Ok(C509Certificate {
+        tbs: TbsCertificate {
+            c509_certificate_type: CERTIFICATE_TYPE_DER_REENCODED,
+            certificate_serial_number: BigUint::from_bytes_be(tbs.raw_serial()),
+            issuer_signature_algorithm: AlgorithmIdentifier::Int(signature_algorithm_id(
+                &cert.signature_algorithm.algorithm,
+            )?),
+            issuer: Some(name_to_rdn(tbs.issuer())?),
+            validity_not_before: validity.not_before.to_datetime(),
+            validity_not_after,
+            subject: name_to_rdn(tbs.subject())?,
+            subject_public_key_algorithm: AlgorithmIdentifier::Int(public_key_algorithm_id(
+                &tbs.subject_pki.algorithm,
+            )?),
+            subject_public_key: tbs.subject_pki.subject_public_key.data.to_vec(),
+            extensions: Extensions(extensions),
+        },
+        issuer_signature_value: cert.signature_value.data.to_vec(),
+    })
 }
 
 /// Look up `oid` in a `(Oid, value)` table, returning the mapped value if
@@ -192,12 +226,12 @@ const SIGNATURE_ALGORITHM_OIDS: &[(Oid<'static>, i32)] = &[
     (OID_PKCS1_SHA512WITHRSA, 25),
 ];
 
-fn signature_algorithm_id(oid: &Oid<'_>) -> Result<i32, String> {
+fn signature_algorithm_id(oid: &Oid<'_>) -> Result<i32> {
     lookup_oid(oid, SIGNATURE_ALGORITHM_OIDS).ok_or_else(|| {
-        format!(
+        Error::X509(format!(
             "issuerSignatureAlgorithm: unrecognized OID {oid} (this converter only knows a \
              handful of common algorithms; extend SIGNATURE_ALGORITHM_OIDS in x509_to_c509.rs)"
-        )
+        ))
     })
 }
 
@@ -216,9 +250,7 @@ const EC_CURVE_OIDS: &[(Oid<'static>, i32)] = &[
     (OID_NIST_EC_P521, 3),
 ];
 
-fn public_key_algorithm_id(
-    alg: &x509_parser::x509::AlgorithmIdentifier<'_>,
-) -> Result<i32, String> {
+fn public_key_algorithm_id(alg: &x509_parser::x509::AlgorithmIdentifier<'_>) -> Result<i32> {
     let oid = &alg.algorithm;
     if let Some(id) = lookup_oid(oid, PUBLIC_KEY_ALGORITHM_OIDS) {
         return Ok(id);
@@ -228,21 +260,21 @@ fn public_key_algorithm_id(
             .parameters
             .clone()
             .ok_or_else(|| {
-                "subjectPublicKeyAlgorithm: EC key is missing its curve OID".to_string()
+                Error::X509("subjectPublicKeyAlgorithm: EC key is missing its curve OID".to_string())
             })?
             .oid()
-            .map_err(|e| format!("subjectPublicKeyAlgorithm: EC curve parameter: {e}"))?;
+            .map_err(|e| x509_err("subjectPublicKeyAlgorithm: EC curve parameter", e))?;
         return lookup_oid(&curve, EC_CURVE_OIDS).ok_or_else(|| {
-            format!(
+            Error::X509(format!(
                 "subjectPublicKeyAlgorithm: unrecognized EC curve OID {curve} (this converter \
                  only knows P-256/P-384/P-521; extend EC_CURVE_OIDS in x509_to_c509.rs)"
-            )
+            ))
         });
     }
-    Err(format!(
+    Err(Error::X509(format!(
         "subjectPublicKeyAlgorithm: unrecognized OID {oid} (this converter only knows a handful \
          of common algorithms; extend PUBLIC_KEY_ALGORITHM_OIDS in x509_to_c509.rs)"
-    ))
+    )))
 }
 
 /// Section 8.12 "C509 Extended Key Usages Registry" ids for the recognized
@@ -303,24 +335,33 @@ fn rdn_attribute_id(oid: &Oid<'_>) -> Option<u16> {
     lookup_oid(oid, RDN_ATTRIBUTE_OIDS)
 }
 
-fn name_to_json(name: &x509_parser::x509::X509Name<'_>) -> Result<JsonName, String> {
+/// A bare RDN attribute value becomes a [`SpecialText::Mac`] if it parses as
+/// a MAC address, otherwise a [`SpecialText::Text`].
+fn special_text(s: &str) -> SpecialText {
+    match s.parse::<MacAddr>() {
+        Ok(mac) => SpecialText::Mac(mac),
+        Err(_) => SpecialText::Text(s.to_string()),
+    }
+}
+
+fn name_to_rdn(name: &X509Name<'_>) -> Result<Name> {
     let mut attrs = Vec::new();
     for attr in name.iter_attributes() {
         let id = rdn_attribute_id(attr.attr_type()).ok_or_else(|| {
-            format!(
+            Error::X509(format!(
                 "name attribute OID {} isn't supported by this converter (extend \
                  `rdn_attribute_id` in x509_to_c509.rs)",
                 attr.attr_type()
-            )
+            ))
         })?;
         let value = attr
             .as_str()
-            .map_err(|e| format!("name attribute OID {}: {e}", attr.attr_type()))?;
-        attrs.push(JsonRdnAttribute {
+            .map_err(|e| x509_err(&format!("name attribute OID {}", attr.attr_type()), e))?;
+        attrs.push(RdnAttribute::Registered {
             id,
             printable_string: attr.attr_value().tag() == Tag::PrintableString,
-            value: value.to_string(),
+            value: special_text(value),
         });
     }
-    Ok(JsonName::Attributes(attrs))
+    Ok(Name(attrs))
 }

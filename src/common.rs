@@ -305,8 +305,7 @@ impl<'b, C> minicbor::Decode<'b, C> for IntOrOid {
     ) -> core::result::Result<Self, minicbor::decode::Error> {
         match IntOrOid::decode(d) {
             Ok(v) => Ok(v),
-            Err(Error::Cbor(e)) => Err(e),
-            Err(Error::Malformed(m)) => Err(minicbor::decode::Error::message(m)),
+            Err(e) => Err(e.into_minicbor()),
         }
     }
 }

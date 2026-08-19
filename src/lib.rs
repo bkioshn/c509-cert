@@ -39,12 +39,16 @@
 //! # Scope
 //!
 //! This crate parses and builds the **C509 CBOR wire structures**. It does
-//! not perform X.509 DER ↔ C509 conversion (point compression, RSA
-//! exponent-elision, ECDSA `R‖S` packing, ...); public keys and signature
-//! values are carried as opaque bytes exactly as they appear on the wire.
-//! It also does not verify signatures or validate certificate semantics
-//! (path building, name constraints enforcement, time validity, ...) —
-//! it is a codec, not a certificate validator.
+//! not verify signatures or validate certificate semantics (path building,
+//! name constraints enforcement, time validity, ...) — it is a codec, not a
+//! certificate validator.
+//!
+//! [`from_x509`] converts a real X.509 certificate into a [`C509Certificate`]
+//! (`c509CertificateType = 3`, "DER re-encoded"), but only at the
+//! structural level: it does not repack public keys or signature values
+//! (no EC point compression, no RSA exponent-elision, no ECDSA `R‖S`
+//! packing) — those are carried as opaque bytes exactly as they appear on
+//! the wire. See its docs for exactly what's supported.
 
 mod algorithm;
 mod certificate;
@@ -53,6 +57,7 @@ mod error;
 mod extensions;
 mod name;
 pub mod registry;
+mod x509_to_c509;
 
 pub use algorithm::AlgorithmIdentifier;
 pub use certificate::{C509Certificate, TbsCertificate};
@@ -78,3 +83,4 @@ pub use oid::ObjectIdentifier;
 /// Re-exported for convenience: used by [`TbsCertificate::validity_not_before`]
 /// and [`TbsCertificate::validity_not_after`].
 pub use time::OffsetDateTime;
+pub use x509_to_c509::from_x509;

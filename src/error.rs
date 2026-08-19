@@ -8,6 +8,10 @@ pub enum Error {
     Cbor(minicbor::decode::Error),
     /// The CBOR was well-formed but did not match the C509 grammar.
     Malformed(&'static str),
+    /// [`crate::from_x509`] could not convert the input X.509 certificate
+    /// (unparseable DER/PEM, or an OID/extension form this converter
+    /// doesn't recognize).
+    X509(String),
 }
 
 impl fmt::Display for Error {
@@ -15,6 +19,7 @@ impl fmt::Display for Error {
         match self {
             Error::Cbor(e) => write!(f, "CBOR decode error: {e}"),
             Error::Malformed(msg) => write!(f, "malformed C509 certificate: {msg}"),
+            Error::X509(msg) => write!(f, "X.509 conversion error: {msg}"),
         }
     }
 }
@@ -23,7 +28,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Cbor(e) => Some(e),
-            Error::Malformed(_) => None,
+            Error::Malformed(_) | Error::X509(_) => None,
         }
     }
 }
@@ -43,6 +48,7 @@ impl Error {
         match self {
             Error::Cbor(e) => e,
             Error::Malformed(m) => minicbor::decode::Error::message(m),
+            Error::X509(_) => unreachable!("X509 errors are never produced while decoding CBOR"),
         }
     }
 }
