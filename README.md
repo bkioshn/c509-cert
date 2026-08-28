@@ -1,5 +1,6 @@
 # c509-cert
 
+[![CI](https://github.com/bkioshn/c509-cert/actions/workflows/ci.yml/badge.svg)](https://github.com/bkioshn/c509-cert/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/c509-cert.svg)](https://crates.io/crates/c509-cert)
 [![docs.rs](https://img.shields.io/docsrs/c509-cert)](https://docs.rs/c509-cert)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
@@ -47,6 +48,15 @@ exactly what's supported.
   `PolicyConstraints`, and IP address/AS ID extensions (RFC 3779).
 - `from_x509`: convert a real X.509 certificate (PEM or DER) straight into
   a `C509Certificate`.
+- `serde` `Serialize`/`Deserialize` on `C509Certificate` and every field
+  type, so `serde_json::to_string`/`from_str` work directly — raw bytes and
+  big integers as hex strings, dates as RFC 3339. This is a separate, more
+  permissive mirror of the wire structures than `from_json` below (see
+  [Library usage](#library-usage)).
+- `from_json`: build a `C509Certificate` from a hand-authored JSON document
+  (dates as RFC 3339 strings, byte fields as hex strings) covering the core
+  `TBSCertificate` fields plus a handful of common extensions — this is
+  what backs the CLI's `--from-json` option.
 - A CLI (`c509-cert`) for decoding hex-encoded C509 certificates, building
   one from a JSON description, and converting a real X.509 certificate
   (PEM/DER) straight into C509 hex.
@@ -77,6 +87,16 @@ let pem_bytes: &[u8] = /* ... */
 let cert = c509_cert::from_x509(pem_bytes)?;
 let hex = hex::encode(cert.encode());
 # Ok::<(), c509_cert::Error>(())
+```
+
+`C509Certificate` implements `serde::Serialize`/`Deserialize`, so it works
+directly with `serde_json` (or any other `serde` data format):
+
+```rust
+let json = serde_json::to_string_pretty(&cert)?;
+let roundtripped: c509_cert::C509Certificate = serde_json::from_str(&json)?;
+assert_eq!(roundtripped, cert);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Add it to `Cargo.toml`:
@@ -152,6 +172,7 @@ the draft's DER↔C509 conversion rules.
 cargo build
 cargo test
 cargo clippy --all-targets
+cargo fmt --all -- --check
 ```
 
 ## License

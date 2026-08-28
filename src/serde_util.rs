@@ -11,7 +11,35 @@ use core::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serializer};
 
-/// Serialize/deserialize any [`FromStr`] + [`Display`] type (e.g.
+/// Shared `Option<T>` plumbing for the string-based codecs below: `Some`
+/// serializes via `to_str`, `None` as JSON `null`.
+fn serialize_opt_str<T, S: Serializer>(
+    v: &Option<T>,
+    to_str: impl FnOnce(&T) -> Result<String, S::Error>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match v {
+        Some(v) => s.serialize_str(&to_str(v)?),
+        None => s.serialize_none(),
+    }
+}
+
+/// Inverse of [`serialize_opt_str`]: `null` deserializes to `None`, a string
+/// is parsed via `parse`.
+fn deserialize_opt_str<'de, T, E, D>(
+    d: D,
+    parse: impl FnOnce(&str) -> Result<T, E>,
+) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    E: Display,
+{
+    Option::<String>::deserialize(d)?
+        .map(|s| parse(&s).map_err(serde::de::Error::custom))
+        .transpose()
+}
+
+/// Serialize/deserialize any [`Display`] + [`FromStr`] type (e.g.
 /// [`macaddr::MacAddr`], [`ipnet::IpNet`]) via its string form.
 pub(crate) mod display_str {
     use super::{Deserialize, Deserializer, Display, FromStr, Serializer};
@@ -44,6 +72,7 @@ pub(crate) mod oid_str {
         d: D,
     ) -> Result<ObjectIdentifier, D::Error> {
         let s = String::deserialize(d)?;
+        // `ObjectIdentifierError` doesn't implement `Display`, only `Debug`.
         ObjectIdentifier::try_from(s.as_str())
             .map_err(|e| serde::de::Error::custom(format!("invalid OID: {e:?}")))
     }
@@ -61,10 +90,7 @@ pub(crate) mod hex_bytes {
         bytes: &Option<Vec<u8>>,
         s: S,
     ) -> Result<S::Ok, S::Error> {
-        match bytes {
-            Some(b) => serialize(b, s),
-            None => s.serialize_none(),
-        }
+        super::serialize_opt_str(bytes, |b| Ok(hex::encode(b)), s)
     }
 
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
@@ -75,9 +101,7 @@ pub(crate) mod hex_bytes {
     pub(crate) fn deserialize_opt<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<Option<Vec<u8>>, D::Error> {
-        Option::<String>::deserialize(d)?
-            .map(|s| hex::decode(&s).map_err(serde::de::Error::custom))
-            .transpose()
+        super::deserialize_opt_str(d, |s| hex::decode(s))
     }
 }
 
@@ -87,6 +111,10 @@ pub(crate) mod biguint_hex {
     use num_bigint::BigUint;
     use serde::{Deserialize, Deserializer, Serializer};
 
+    fn parse(s: &str) -> Result<BigUint, hex::FromHexError> {
+        hex::decode(s).map(|bytes| BigUint::from_bytes_be(&bytes))
+    }
+
     pub(crate) fn serialize<S: Serializer>(n: &BigUint, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&hex::encode(n.to_bytes_be()))
     }
@@ -95,27 +123,18 @@ pub(crate) mod biguint_hex {
         n: &Option<BigUint>,
         s: S,
     ) -> Result<S::Ok, S::Error> {
-        match n {
-            Some(n) => serialize(n, s),
-            None => s.serialize_none(),
-        }
+        super::serialize_opt_str(n, |n| Ok(hex::encode(n.to_bytes_be())), s)
     }
 
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<BigUint, D::Error> {
         let s = String::deserialize(d)?;
-        let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
-        Ok(BigUint::from_bytes_be(&bytes))
+        parse(&s).map_err(serde::de::Error::custom)
     }
 
     pub(crate) fn deserialize_opt<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<Option<BigUint>, D::Error> {
-        Option::<String>::deserialize(d)?
-            .map(|s| {
-                let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
-                Ok(BigUint::from_bytes_be(&bytes))
-            })
-            .transpose()
+        super::deserialize_opt_str(d, parse)
     }
 }
 
@@ -135,10 +154,11 @@ pub(crate) mod rfc3339 {
         dt: &Option<OffsetDateTime>,
         s: S,
     ) -> Result<S::Ok, S::Error> {
-        match dt {
-            Some(dt) => serialize(dt, s),
-            None => s.serialize_none(),
-        }
+        super::serialize_opt_str(
+            dt,
+            |dt| dt.format(&Rfc3339).map_err(serde::ser::Error::custom),
+            s,
+        )
     }
 
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<OffsetDateTime, D::Error> {
@@ -149,8 +169,6 @@ pub(crate) mod rfc3339 {
     pub(crate) fn deserialize_opt<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<Option<OffsetDateTime>, D::Error> {
-        Option::<String>::deserialize(d)?
-            .map(|s| OffsetDateTime::parse(&s, &Rfc3339).map_err(serde::de::Error::custom))
-            .transpose()
+        super::deserialize_opt_str(d, |s| OffsetDateTime::parse(s, &Rfc3339))
     }
 }

@@ -18,7 +18,7 @@ use crate::extensions::{
 use crate::name::{Name, RdnAttribute};
 use crate::{AlgorithmIdentifier, C509Certificate, IntOrOid, MacAddr, SpecialText, TbsCertificate};
 
-/// Parse `input` as JSON matching [`JsonCertificate`]'s schema and build a
+/// Parse `input` as JSON matching `JsonCertificate`'s schema and build a
 /// [`C509Certificate`] from it.
 ///
 /// See the module docs for exactly what's supported.

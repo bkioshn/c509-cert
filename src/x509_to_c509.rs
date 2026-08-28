@@ -62,8 +62,8 @@ pub fn from_x509(input: &[u8]) -> Result<C509Certificate> {
         .windows(11)
         .any(|w| w == b"-----BEGIN ");
     if looks_like_pem {
-        let (pem, _) =
-            Pem::read(std::io::Cursor::new(input)).map_err(|e| x509_err("failed to read PEM", e))?;
+        let (pem, _) = Pem::read(std::io::Cursor::new(input))
+            .map_err(|e| x509_err("failed to read PEM", e))?;
         let cert = pem
             .parse_x509()
             .map_err(|e| x509_err("failed to parse X.509 DER inside PEM", e))?;
@@ -260,7 +260,9 @@ fn public_key_algorithm_id(alg: &x509_parser::x509::AlgorithmIdentifier<'_>) -> 
             .parameters
             .clone()
             .ok_or_else(|| {
-                Error::X509("subjectPublicKeyAlgorithm: EC key is missing its curve OID".to_string())
+                Error::X509(
+                    "subjectPublicKeyAlgorithm: EC key is missing its curve OID".to_string(),
+                )
             })?
             .oid()
             .map_err(|e| x509_err("subjectPublicKeyAlgorithm: EC curve parameter", e))?;

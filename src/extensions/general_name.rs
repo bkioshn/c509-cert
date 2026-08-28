@@ -16,7 +16,7 @@ use crate::serde_util;
 
 /// Section 8.13 "C509 General Names Registry".
 ///
-/// Each variant's discriminant is its registry value; [`GeneralNameKind`]
+/// Each variant's discriminant is its registry value; `GeneralNameKind`
 #[derive(Debug, Clone, PartialEq, Eq, EnumDiscriminants, Serialize, Deserialize)]
 #[strum_discriminants(name(GeneralNameKind), derive(FromRepr))]
 #[repr(i32)]
@@ -49,7 +49,7 @@ pub enum GeneralNameValue {
     ///
     /// Not a real registry value; the discriminant is a sentinel that never
     /// collides with a registry entry so it always falls into the same
-    /// catch-all arm as `None` in [`GeneralName::decode`].
+    /// catch-all arm as `None` in `GeneralName::decode`.
     Raw(#[serde(with = "serde_util::hex_bytes")] Vec<u8>) = i32::MIN,
 }
 
