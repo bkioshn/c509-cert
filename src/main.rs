@@ -4,8 +4,6 @@ use c509_cert::C509Certificate;
 use minicbor::Decoder;
 use minicbor::data::Type;
 
-mod cert_json;
-
 fn hex_decode(s: &str) -> Result<Vec<u8>, hex::FromHexError> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     hex::decode(s)
@@ -63,12 +61,8 @@ fn encode_from_json(path: &str, sequence: bool) {
         eprintln!("failed to read {path}: {e}");
         std::process::exit(1);
     });
-    let json: cert_json::JsonCertificate = serde_json::from_str(&text).unwrap_or_else(|e| {
-        eprintln!("failed to parse {path}: {e}");
-        std::process::exit(1);
-    });
-    let cert = json.into_certificate().unwrap_or_else(|e| {
-        eprintln!("failed to build certificate: {e}");
+    let cert = c509_cert::from_json(&text).unwrap_or_else(|e| {
+        eprintln!("failed to build certificate from {path}: {e}");
         std::process::exit(1);
     });
     let bytes = if sequence {

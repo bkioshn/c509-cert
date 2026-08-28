@@ -4,11 +4,12 @@
 //! If 'cA' = true and 'pathLenConstraint' is present then extensionValue = pathLenConstraint.
 
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
 /// A `BasicConstraints`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BasicConstraints {
     /// The certificate is not a CA certificate.
     NotCa,

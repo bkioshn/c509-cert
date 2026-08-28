@@ -1,18 +1,32 @@
 //! Hand-authored JSON schema for building a [`C509Certificate`] from a
-//! human-edited file (used by the CLI's `--from-json` option). This is *not*
-//! a mechanical mirror of the crate's CBOR types: dates are RFC 3339
-//! strings, byte fields are hex strings, and only the core `TBSCertificate`
-//! fields plus a handful of the most common extensions are supported.
+//! human-edited JSON document, via [`crate::from_json`] (also used by the
+//! CLI's `--from-json` option). This is *not* a mechanical mirror of the
+//! crate's CBOR types: dates are RFC 3339 strings, byte fields are hex
+//! strings, and only the core `TBSCertificate` fields plus a handful of the
+//! most common extensions are supported.
 
-use c509_cert::{
-    AlgorithmIdentifier, AuthorityKeyIdentifier, BasicConstraints, C509Certificate, ExtKeyUsage,
-    Extension, ExtensionValue, Extensions, GeneralName, GeneralNameValue, IntOrOid, MacAddr, Name,
-    RdnAttribute, SpecialText, TbsCertificate,
-};
 use num_bigint::BigUint;
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+
+use crate::error::{Error, Result};
+use crate::extensions::{
+    AuthorityKeyIdentifier, BasicConstraints, ExtKeyUsage, Extension, ExtensionValue, Extensions,
+    GeneralName, GeneralNameValue,
+};
+use crate::name::{Name, RdnAttribute};
+use crate::{AlgorithmIdentifier, C509Certificate, IntOrOid, MacAddr, SpecialText, TbsCertificate};
+
+/// Parse `input` as JSON matching [`JsonCertificate`]'s schema and build a
+/// [`C509Certificate`] from it.
+///
+/// See the module docs for exactly what's supported.
+pub fn from_json(input: &str) -> Result<C509Certificate> {
+    let json: JsonCertificate =
+        serde_json::from_str(input).map_err(|e| Error::Json(format!("invalid JSON: {e}")))?;
+    json.into_certificate()
+}
 
 /// Registry ids (Section 8.8 "C509 Extensions Registry") for the extensions
 /// this schema understands.
@@ -109,9 +123,9 @@ pub(crate) enum JsonExtension {
 }
 
 /// Parse a whitespace-tolerant hex string into bytes.
-fn hex_bytes(field: &str, s: &str) -> Result<Vec<u8>, String> {
+fn hex_bytes(field: &str, s: &str) -> Result<Vec<u8>> {
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    hex::decode(&cleaned).map_err(|e| format!("{field}: invalid hex: {e}"))
+    hex::decode(&cleaned).map_err(|e| Error::Json(format!("{field}: invalid hex: {e}")))
 }
 
 /// A bare string becomes a [`SpecialText::Mac`] if it parses as a MAC
@@ -146,7 +160,7 @@ impl JsonName {
 }
 
 impl JsonExtension {
-    fn into_extension(self) -> Result<Extension, String> {
+    fn into_extension(self) -> Result<Extension> {
         let (id, critical, value) = match self {
             JsonExtension::BasicConstraints {
                 critical,
@@ -212,18 +226,18 @@ impl JsonExtension {
 }
 
 impl JsonCertificate {
-    pub fn into_certificate(self) -> Result<C509Certificate, String> {
+    pub(crate) fn into_certificate(self) -> Result<C509Certificate> {
         let certificate_serial_number =
             BigUint::from_bytes_be(&hex_bytes("serial_number", &self.serial_number)?);
 
         let validity_not_before = OffsetDateTime::parse(&self.validity_not_before, &Rfc3339)
-            .map_err(|e| format!("validity_not_before: {e}"))?;
+            .map_err(|e| Error::Json(format!("validity_not_before: {e}")))?;
         let validity_not_after = self
             .validity_not_after
             .as_deref()
             .map(|s| OffsetDateTime::parse(s, &Rfc3339))
             .transpose()
-            .map_err(|e| format!("validity_not_after: {e}"))?;
+            .map_err(|e| Error::Json(format!("validity_not_after: {e}")))?;
 
         let subject_public_key = hex_bytes("subject_public_key", &self.subject_public_key)?;
         let issuer_signature_value =
@@ -233,7 +247,7 @@ impl JsonCertificate {
             .extensions
             .into_iter()
             .map(JsonExtension::into_extension)
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(C509Certificate {
             tbs: TbsCertificate {

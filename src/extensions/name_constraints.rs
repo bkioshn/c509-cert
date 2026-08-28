@@ -4,6 +4,7 @@
 
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use super::general_name::{GeneralName, decode_general_names, encode_general_names};
 use crate::common;
@@ -12,7 +13,7 @@ use crate::error::Result;
 /// An `NameConstraints` extension.
 /// `NameConstraints = [ permittedSubtrees: GeneralSubtrees / null,
 ///                     excludedSubtrees: GeneralSubtrees / null ]`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NameConstraints {
     pub permitted: Option<Vec<GeneralName>>,
     pub excluded: Option<Vec<GeneralName>>,

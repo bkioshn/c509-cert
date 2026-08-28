@@ -5,6 +5,7 @@
 //!   ]
 
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common::{decode_opt_uint, encode_opt_uint, expect_array_len};
 use crate::error::Result;
@@ -13,7 +14,7 @@ use crate::error::Result;
 ///     requireExplicitPolicy: uint / null,
 ///     inhibitPolicyMapping: uint / null,
 ///   ]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyConstraints {
     /// The require explicit policy.
     pub require_explicit_policy: Option<u32>,

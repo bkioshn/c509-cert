@@ -2,6 +2,7 @@
 //! `SubjectDirectoryAttributes = [ + RDNAttributes ]`
 
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common::{self, RdnAttr, SpecialText};
 use crate::error::{Error, Result};
@@ -11,7 +12,7 @@ use crate::error::{Error, Result};
 pub type RdnAttributes = RdnAttr<Vec<SpecialText>, Vec<Vec<u8>>>;
 
 /// `SubjectDirectoryAttributes = [ + RDNAttributes ]`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubjectDirectoryAttributes(pub Vec<RdnAttributes>);
 
 impl SubjectDirectoryAttributes {

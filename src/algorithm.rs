@@ -13,12 +13,14 @@
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
 use oid::ObjectIdentifier;
+use serde::{Deserialize, Serialize};
 
 use crate::common;
 use crate::error::{Error, Result};
+use crate::serde_util;
 
 /// An algorithm identifier.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AlgorithmIdentifier {
     /// A registry value from Section 8.14 (signature algorithms) or Section
     /// 8.15 (public key algorithms).
@@ -26,7 +28,12 @@ pub enum AlgorithmIdentifier {
     /// An algorithm identified by OID, with DER-encoded parameters carried
     /// verbatim as an opaque byte string when present.
     Oid {
+        #[serde(with = "serde_util::oid_str")]
         algorithm: ObjectIdentifier,
+        #[serde(
+            serialize_with = "serde_util::hex_bytes::serialize_opt",
+            deserialize_with = "serde_util::hex_bytes::deserialize_opt"
+        )]
         parameters: Option<Vec<u8>>,
     },
 }

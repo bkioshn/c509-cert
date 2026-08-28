@@ -4,19 +4,26 @@
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
 use num_bigint::BigUint;
+use serde::{Deserialize, Serialize};
 
 use super::general_name::{GeneralName, decode_general_names, encode_general_names};
 use crate::common;
 use crate::error::Result;
+use crate::serde_util;
 
 /// An `AuthorityKeyIdentifier`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityKeyIdentifier {
     /// The key identifier.
+    #[serde(with = "serde_util::hex_bytes")]
     pub key_identifier: Vec<u8>,
     /// The certificate issuer.
     pub cert_issuer: Option<Vec<GeneralName>>,
     /// The certificate serial number.
+    #[serde(
+        serialize_with = "serde_util::biguint_hex::serialize_opt",
+        deserialize_with = "serde_util::biguint_hex::deserialize_opt"
+    )]
     pub cert_serial: Option<BigUint>,
 }
 

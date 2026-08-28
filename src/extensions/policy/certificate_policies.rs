@@ -2,12 +2,13 @@
 //! `CertificatePolicies = [ + ( PolicyIdentifier, [ * PolicyQualifierInfo ] ) ]`
 
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common::{self, IntOrOid};
 use crate::error::{Error, Result};
 
 /// `CertificatePolicies = [ + ( PolicyIdentifier, [ * PolicyQualifierInfo ] ) ]`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CertificatePolicies(pub Vec<(PolicyIdentifier, Vec<PolicyQualifierInfo>)>);
 
 impl CertificatePolicies {
@@ -47,7 +48,7 @@ impl CertificatePolicies {
 pub type PolicyIdentifier = IntOrOid;
 
 /// `PolicyQualifierInfo = ( policyQualifierId: int / ~oid, qualifier: text )`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyQualifierInfo {
     /// The policy qualifier identifier.
     pub id: IntOrOid,

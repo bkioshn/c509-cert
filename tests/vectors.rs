@@ -4,8 +4,9 @@
 use std::net::IpAddr;
 
 use c509_cert::{
-    AlgorithmIdentifier, C509Certificate, ExtKeyUsage, Extension, ExtensionValue, IntOrOid,
-    IpAddressChoice, IpAddressOrRange, Name, RdnAttribute, SpecialText,
+    AlgorithmIdentifier, C509Certificate, ExtKeyUsage, Extension, ExtensionValue, Extensions,
+    IntOrOid, IpAddressChoice, IpAddressFamily, IpAddressOrRange, Name, RdnAttribute, SpecialText,
+    TbsCertificate,
 };
 use ipnet::IpNet;
 use macaddr::MacAddr;
@@ -374,4 +375,125 @@ fn appendix_a5_ip_addr_blocks_example() {
     let reencoded = cert.encode();
     let reparsed = C509Certificate::decode(&reencoded).expect("re-decode");
     assert_eq!(reparsed, cert);
+}
+
+/// `serde_json::to_string` must work directly on a `C509Certificate`,
+/// producing a human-readable mirror of its fields: hex strings for raw byte
+/// blobs and big integers, RFC 3339 strings for timestamps, and the
+/// `Display` form for exotic types like MAC addresses.
+#[test]
+fn serde_json_serializes_c509_certificate() {
+    let bytes = hex(A1_1_DER_REENCODED);
+    let cert = C509Certificate::decode_sequence(&bytes).expect("decode_sequence");
+
+    let json = serde_json::to_string(&cert).expect("serde_json::to_string(&cert)");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+    assert_eq!(
+        value["tbs"]["certificate_serial_number"],
+        hex::encode(cert.tbs.certificate_serial_number.to_bytes_be())
+    );
+    assert_eq!(
+        value["tbs"]["validity_not_before"],
+        cert.tbs
+            .validity_not_before
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    );
+    assert_eq!(
+        value["tbs"]["validity_not_after"],
+        cert.tbs
+            .validity_not_after
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    );
+    assert_eq!(
+        value["tbs"]["subject_public_key"],
+        hex::encode(&cert.tbs.subject_public_key)
+    );
+    assert_eq!(
+        value["issuer_signature_value"],
+        hex::encode(&cert.issuer_signature_value)
+    );
+
+    // The compact single-commonName subject is a MAC address here (Appendix
+    // A.1's worked example); confirm it comes through as its Display string,
+    // not as a raw byte array.
+    let RdnAttribute::Registered {
+        value: SpecialText::Mac(mac),
+        ..
+    } = &cert.tbs.subject.0[0]
+    else {
+        panic!("expected a compact commonName MAC address subject");
+    };
+    assert_eq!(
+        value["tbs"]["subject"][0]["Registered"]["value"]["Mac"],
+        mac.to_string()
+    );
+}
+
+/// A `C509Certificate` value must survive `serde_json::to_string` followed
+/// by `serde_json::from_str` unchanged. Built directly (not decoded from
+/// CBOR) so it can exercise field shapes the other worked-example vectors
+/// don't: OID-form `AlgorithmIdentifier`s, an OID-identified extension, and
+/// an `IpAddrBlocks` extension mixing a prefix and a range.
+#[test]
+fn serde_json_roundtrips_c509_certificate() {
+    let cert = C509Certificate {
+        tbs: TbsCertificate {
+            c509_certificate_type: 3,
+            certificate_serial_number: BigUint::from(128_269u32),
+            issuer_signature_algorithm: AlgorithmIdentifier::Oid {
+                algorithm: oid::ObjectIdentifier::try_from("1.2.840.10045.4.3.2").unwrap(),
+                parameters: Some(vec![0xDE, 0xAD]),
+            },
+            issuer: None,
+            validity_not_before: OffsetDateTime::from_unix_timestamp(1_672_531_200).unwrap(),
+            validity_not_after: Some(OffsetDateTime::from_unix_timestamp(1_767_225_600).unwrap()),
+            subject: Name(vec![RdnAttribute::Registered {
+                id: 1,
+                printable_string: false,
+                value: SpecialText::Mac(MacAddr::from([0x01, 0x23, 0x45, 0x67, 0x89, 0xAB])),
+            }]),
+            subject_public_key_algorithm: AlgorithmIdentifier::Oid {
+                algorithm: oid::ObjectIdentifier::try_from("1.2.840.10045.2.1").unwrap(),
+                parameters: None,
+            },
+            subject_public_key: vec![0xFE; 33],
+            extensions: Extensions(vec![
+                Extension {
+                    id: IntOrOid::Int(2),
+                    critical: false,
+                    value: ExtensionValue::KeyUsage(1),
+                },
+                Extension {
+                    id: IntOrOid::Oid(oid::ObjectIdentifier::try_from("1.2.3.4.5").unwrap()),
+                    critical: true,
+                    value: ExtensionValue::Raw(vec![0xAA, 0xBB]),
+                },
+                Extension {
+                    id: IntOrOid::Int(32),
+                    critical: false,
+                    value: ExtensionValue::IpAddrBlocks(vec![IpAddressFamily {
+                        afi: 1,
+                        safi: None,
+                        choice: IpAddressChoice::Prefixes(vec![
+                            IpAddressOrRange::Prefix("10.0.0.0/8".parse().unwrap()),
+                            IpAddressOrRange::Range {
+                                min: "192.168.1.0".parse().unwrap(),
+                                max: "192.168.1.255".parse().unwrap(),
+                            },
+                        ]),
+                    }]),
+                },
+            ]),
+        },
+        issuer_signature_value: vec![0xD4, 0x32, 0x0B, 0x1D],
+    };
+
+    let json = serde_json::to_string(&cert).expect("serde_json::to_string(&cert)");
+    let roundtripped: C509Certificate =
+        serde_json::from_str(&json).expect("serde_json::from_str(&json)");
+    assert_eq!(roundtripped, cert);
 }

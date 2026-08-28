@@ -12,6 +12,9 @@ pub enum Error {
     /// (unparseable DER/PEM, or an OID/extension form this converter
     /// doesn't recognize).
     X509(String),
+    /// [`crate::from_json`] could not build a certificate from the input
+    /// JSON (malformed JSON, or a value that doesn't satisfy the schema).
+    Json(String),
 }
 
 impl fmt::Display for Error {
@@ -20,6 +23,7 @@ impl fmt::Display for Error {
             Error::Cbor(e) => write!(f, "CBOR decode error: {e}"),
             Error::Malformed(msg) => write!(f, "malformed C509 certificate: {msg}"),
             Error::X509(msg) => write!(f, "X.509 conversion error: {msg}"),
+            Error::Json(msg) => write!(f, "JSON conversion error: {msg}"),
         }
     }
 }
@@ -28,7 +32,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Cbor(e) => Some(e),
-            Error::Malformed(_) | Error::X509(_) => None,
+            Error::Malformed(_) | Error::X509(_) | Error::Json(_) => None,
         }
     }
 }
@@ -49,6 +53,7 @@ impl Error {
             Error::Cbor(e) => e,
             Error::Malformed(m) => minicbor::decode::Error::message(m),
             Error::X509(_) => unreachable!("X509 errors are never produced while decoding CBOR"),
+            Error::Json(_) => unreachable!("Json errors are never produced while decoding CBOR"),
         }
     }
 }

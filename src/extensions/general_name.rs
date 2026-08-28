@@ -6,49 +6,55 @@ use macaddr::MacAddr;
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
 use oid::ObjectIdentifier;
+use serde::{Deserialize, Serialize};
 use strum::{EnumDiscriminants, FromRepr};
 
 use crate::common;
 use crate::error::{Error, Result};
 use crate::name::Name;
+use crate::serde_util;
 
 /// Section 8.13 "C509 General Names Registry".
 ///
 /// Each variant's discriminant is its registry value; [`GeneralNameKind`]
-#[derive(Debug, Clone, PartialEq, Eq, EnumDiscriminants)]
+#[derive(Debug, Clone, PartialEq, Eq, EnumDiscriminants, Serialize, Deserialize)]
 #[strum_discriminants(name(GeneralNameKind), derive(FromRepr))]
 #[repr(i32)]
 pub enum GeneralNameValue {
     /// `otherName` (registry value 0): `[ ~oid, bytes ]`.
     OtherName {
+        #[serde(with = "serde_util::oid_str")]
         type_id: ObjectIdentifier,
+        #[serde(with = "serde_util::hex_bytes")]
         value: Vec<u8>,
     } = 0,
     /// `otherName` with `id-on-hardwareModuleName` (registry value -1).
     HardwareModuleName {
+        #[serde(with = "serde_util::oid_str")]
         hw_type: ObjectIdentifier,
+        #[serde(with = "serde_util::hex_bytes")]
         hw_serial_num: Vec<u8>,
     } = -1,
     /// `otherName` with `id-on-SmtpUTF8Mailbox` (registry value -2).
     SmtpUtf8Mailbox(String) = -2,
     /// `otherName` with `id-on-MACAddress` (registry value -3).
-    MacAddress(MacAddr) = -3,
+    MacAddress(#[serde(with = "serde_util::display_str")] MacAddr) = -3,
     Rfc822Name(String) = 1,
     DnsName(String) = 2,
     DirectoryName(Name) = 4,
     Uri(String) = 6,
-    IpAddress(Vec<u8>) = 7,
-    RegisteredId(ObjectIdentifier) = 8,
+    IpAddress(#[serde(with = "serde_util::hex_bytes")] Vec<u8>) = 7,
+    RegisteredId(#[serde(with = "serde_util::oid_str")] ObjectIdentifier) = 8,
     /// A `GeneralNameType` this crate does not decode; the raw CBOR item.
     ///
     /// Not a real registry value; the discriminant is a sentinel that never
     /// collides with a registry entry so it always falls into the same
     /// catch-all arm as `None` in [`GeneralName::decode`].
-    Raw(Vec<u8>) = i32::MIN,
+    Raw(#[serde(with = "serde_util::hex_bytes")] Vec<u8>) = i32::MIN,
 }
 
 /// A `GeneralName` is a single name in a list of names.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GeneralName {
     pub kind: i32,
     pub value: GeneralNameValue,

@@ -49,17 +49,27 @@
 //! (no EC point compression, no RSA exponent-elision, no ECDSA `R‖S`
 //! packing) — those are carried as opaque bytes exactly as they appear on
 //! the wire. See its docs for exactly what's supported.
+//!
+//! [`from_json`] builds a [`C509Certificate`] from a hand-authored JSON
+//! document (dates as RFC 3339 strings, byte fields as hex strings). It is
+//! not a mechanical mirror of the CBOR types — only the core
+//! `TBSCertificate` fields plus a handful of common extensions are
+//! supported. Call [`C509Certificate::encode`] (or
+//! [`C509Certificate::encode_sequence`]) on the result to get CBOR bytes.
 
 mod algorithm;
+mod cert_json;
 mod certificate;
 mod common;
 mod error;
 mod extensions;
 mod name;
 pub mod registry;
+mod serde_util;
 mod x509_to_c509;
 
 pub use algorithm::AlgorithmIdentifier;
+pub use cert_json::from_json;
 pub use certificate::{C509Certificate, TbsCertificate};
 pub use common::{IntOrOid, SpecialText};
 pub use error::{Error, Result};

@@ -43,17 +43,19 @@ use general_name::{decode_alt_name, encode_alt_name};
 use ip_addr::{AsIdOrRange, IpAddressFamily};
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common::{self, IntOrOid};
 use crate::error::{Error, Result};
+use crate::serde_util;
 
 // =============================== ExtensionValue ================================
 
 /// An extension value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExtensionValue {
     /// id 1
-    SubjectKeyIdentifier(Vec<u8>),
+    SubjectKeyIdentifier(#[serde(with = "serde_util::hex_bytes")] Vec<u8>),
     /// id 2 — `KeyUsage` BIT STRING interpreted as an unsigned int (network
     /// byte order).
     KeyUsage(u32),
@@ -102,7 +104,7 @@ pub enum ExtensionValue {
     /// Any int `extensionID` not special-cased above, or any `~oid`
     /// extension: the raw undecoded value (DER `extnValue` bytes for the
     /// oid form, raw CBOR item bytes for the int form).
-    Raw(Vec<u8>),
+    Raw(#[serde(with = "serde_util::hex_bytes")] Vec<u8>),
 }
 
 impl ExtensionValue {
@@ -222,7 +224,7 @@ fn encode_critical_i32<W: minicbor::encode::Write>(
 
 // ================================= Extension ===================================
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Extension {
     /// The registry id (Section 8.8) or OID of this extension. Note the
     /// criticality *sign* used on the wire is not folded in here; see
@@ -297,7 +299,7 @@ impl Extension {
 
 // ================================= Extensions ===================================
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Extensions(pub Vec<Extension>);
 
 impl Extensions {

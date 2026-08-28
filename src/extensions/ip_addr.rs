@@ -22,8 +22,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use ipnet::IpNet;
 use minicbor::data::{Int, Type};
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::serde_util;
 
 /// The CBOR int delta form is only used when the whole `(unusedBits + 1) ||
 /// value` byte sequence fits in this many octets (i.e. fits a CBOR major
@@ -143,16 +145,16 @@ fn framed_from_absolute_int(abs: i128) -> Result<(Vec<u8>, u8)> {
 /// A `Prefix` or `Range` entry, reduced to plain `(significant bytes,
 /// unusedBits)` pairs ready for either the delta-coded int form or the raw
 /// bytes form.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IpAddressOrRange {
     /// A CIDR-style address prefix.
-    Prefix(IpNet),
+    Prefix(#[serde(with = "serde_util::display_str")] IpNet),
     /// An arbitrary (not necessarily prefix-aligned) address range.
     Range { min: IpAddr, max: IpAddr },
 }
 
 /// The choice of address form (prefixes or ranges) for a given address family.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IpAddressChoice {
     /// `inherit` — this address family is inherited from the issuer.
     Inherit,
@@ -161,7 +163,7 @@ pub enum IpAddressChoice {
 }
 
 /// A family of addresses, identified by its Address Family Identifier (AFI)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IpAddressFamily {
     /// The Address Family Identifier (AFI).
     pub afi: u16,
@@ -173,7 +175,7 @@ pub struct IpAddressFamily {
 
 /// An AS-number or AS-range entry, reduced to plain `(min, max)` pairs ready for either
 /// the delta-coded int form or the raw bytes form.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AsIdOrRange {
     Id(u64),
     Range { min: u64, max: u64 },

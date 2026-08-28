@@ -5,9 +5,11 @@ use minicbor::Decoder;
 use minicbor::data::{Tag, Type};
 use num_bigint::BigUint;
 use oid::ObjectIdentifier;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::error::{Error, Result};
+use crate::serde_util;
 
 /// Decode a MAC address from its raw bytes: 6 bytes (48-bit) for EUI-48, 8 bytes (64-bit) for EUI-64.
 pub(crate) fn decode_mac(bytes: &[u8]) -> Result<MacAddr> {
@@ -92,7 +94,7 @@ impl<T: RdnValue> RdnValue for Vec<T> {
 /// bare values) and `RDNAttributes` ([`crate::extensions::RdnAttributes`],
 /// multi-valued: `S`/`B` are `Vec`s) share this shape:
 /// `( attributeType: int, attributeValue: S ) // ( attributeType: ~oid, attributeValue: B )`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RdnAttr<S, B> {
     Registered {
         id: u16,
@@ -100,6 +102,7 @@ pub enum RdnAttr<S, B> {
         value: S,
     },
     Oid {
+        #[serde(with = "serde_util::oid_str")]
         oid: ObjectIdentifier,
         value: B,
     },
@@ -263,12 +266,12 @@ pub(crate) fn write_raw<W: minicbor::encode::Write>(
 }
 
 /// A C509 identifier that's either a registry-assigned int or, if unregistered, a raw OID.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IntOrOid {
     /// A registry-assigned integer value.
     Int(i32),
     /// An unregistered OID value.
-    Oid(ObjectIdentifier),
+    Oid(#[serde(with = "serde_util::oid_str")] ObjectIdentifier),
 }
 
 impl IntOrOid {
@@ -323,14 +326,14 @@ impl<C> minicbor::Encode<C> for IntOrOid {
 
 /// An RDN attribute value: plain text, raw bytes (used when the text looked
 /// like hex), or a tagged MAC address.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpecialText {
     /// A plain text string.
     Text(String),
     /// Raw bytes (used when the text looked like hex).
-    Bytes(Vec<u8>),
+    Bytes(#[serde(with = "serde_util::hex_bytes")] Vec<u8>),
     /// A tagged MAC address.
-    Mac(MacAddr),
+    Mac(#[serde(with = "serde_util::display_str")] MacAddr),
 }
 
 impl SpecialText {

@@ -24,6 +24,7 @@
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
 use num_bigint::BigUint;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::algorithm::AlgorithmIdentifier;
@@ -31,18 +32,20 @@ use crate::common;
 use crate::error::{Error, Result};
 use crate::extensions::Extensions;
 use crate::name::Name;
+use crate::serde_util;
 
 /// The number of fields represent in array form.
 const FIELD_COUNT: u64 = 11;
 
 /// A To Be Signed certificate.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TbsCertificate {
     /// The X.509 certificate type `2` for natively signed certificate
     /// `3` for a CBOR re-encoding of a DER-encoded certificate.
     pub c509_certificate_type: i32,
     /// `biguint`: Certificate serial number unwrapped CBOR unsigned bignum.
     ///  Big-endian magnitude, no leading `0x00` byte.
+    #[serde(with = "serde_util::biguint_hex")]
     pub certificate_serial_number: BigUint,
     /// `AlgorithmIdentifier`: the signature algorithm used to sign the
     /// certificate.
@@ -50,26 +53,33 @@ pub struct TbsCertificate {
     /// `None` means "identical to `subject`" (self-signed).
     pub issuer: Option<Name>,
     /// Certificate valid from this date and time.
+    #[serde(with = "serde_util::rfc3339")]
     pub validity_not_before: OffsetDateTime,
     /// Certificate expiration this date and time.
     /// `None` means "no expiration" (X.509 `99991231235959Z`).
+    #[serde(
+        serialize_with = "serde_util::rfc3339::serialize_opt",
+        deserialize_with = "serde_util::rfc3339::deserialize_opt"
+    )]
     pub validity_not_after: Option<OffsetDateTime>,
     /// The certificate subject.
     pub subject: Name,
     /// The algorithm used to encode the subject public key.
     pub subject_public_key_algorithm: AlgorithmIdentifier,
     /// The certificate subject public key.
+    #[serde(with = "serde_util::hex_bytes")]
     pub subject_public_key: Vec<u8>,
     /// The certificate extensions.
     pub extensions: Extensions,
 }
 
 /// A Cbor-encoded X.509 certificate.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct C509Certificate {
     /// The TBS (To Be Signed) certificate.
     pub tbs: TbsCertificate,
     /// The certificate issuer signature value.
+    #[serde(with = "serde_util::hex_bytes")]
     pub issuer_signature_value: Vec<u8>,
 }
 

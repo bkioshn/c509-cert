@@ -3,13 +3,14 @@
 
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common::IntOrOid;
 use crate::error::Result;
 
 /// `ExtKeyUsageSyntax = [ 2* KeyPurposeId ] / KeyPurposeId`
 /// A wrapper around a vector of `KeyPurposeId`s.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtKeyUsage(pub Vec<IntOrOid>);
 
 impl ExtKeyUsage {

@@ -8,13 +8,14 @@
 
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common;
 use crate::error::Result;
 use crate::name::Name;
 
 /// A `DistributionPointName`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DistributionPointName {
     /// The full name of the distribution point.
     pub full_name: Vec<String>,

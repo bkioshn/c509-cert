@@ -4,6 +4,7 @@
 
 use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common::{self, RdnAttr, SpecialText};
 use crate::error::{Error, Result};
@@ -17,7 +18,7 @@ const COMMON_NAME_ID: u16 = 1;
 pub type RdnAttribute = RdnAttr<SpecialText, Vec<u8>>;
 
 /// A name containing a sequence of RDNAttributes or a single SpecialText.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Name(pub Vec<RdnAttribute>);
 
 impl Name {

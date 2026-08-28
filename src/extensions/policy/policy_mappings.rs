@@ -4,12 +4,13 @@
 //!   ]
 
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common::{self, IntOrOid};
 use crate::error::{Error, Result};
 
 /// `PolicyMappings = [ + (issuerDomainPolicy: int/~oid, subjectDomainPolicy: int/~oid) ]`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyMappings(pub Vec<(IntOrOid, IntOrOid)>);
 
 impl PolicyMappings {

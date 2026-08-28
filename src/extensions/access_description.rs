@@ -2,12 +2,13 @@
 //! `SubjectInfoAccess` (id 31).
 /// `AccessDescription = ( accessMethod: int / ~oid , uri: text )`
 use minicbor::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::common::{self, IntOrOid};
 use crate::error::{Error, Result};
 
 /// An `AccessDescription`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccessDescription {
     /// The access method, either an integer or an OID.
     pub access_method: IntOrOid,
